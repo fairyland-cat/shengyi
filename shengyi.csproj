@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationManifest>src\app.manifest</ApplicationManifest>
+    <ApplicationIcon>assets\shengyi.ico</ApplicationIcon>
+    <RootNamespace>Shengyi</RootNamespace>
+    <AssemblyName>shengyi</AssemblyName>
+    <Version>0.3.0</Version>
+    <Product>绳忆</Product>
+    <Authors>shengyi</Authors>
+    <Company>shengyi</Company>
+    <Copyright>Copyright (c) 2026 shengyi</Copyright>
+    <Description>剪贴板历史晾在一根绳上。</Description>
+    <!-- WPF reads per-monitor DPI awareness from the manifest; the WinForms analyzer doesn't know that. -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The installer window is a separate .NET Framework program, built by scripts/build-release.ps1. -->
+    <Compile Remove="installer/**" />
+    <Page Remove="installer/**" />
+    <None Remove="installer/**" />
+    <EmbeddedResource Include="assets\shengyi.ico" LogicalName="shengyi.ico" />
+  </ItemGroup>
+
+</Project>
