@@ -1,7 +1,8 @@
-# Builds everything that goes into a release, into dist/:
+﻿# Builds everything that goes into a release, into dist/:
 #   shengyi-Setup-<version>.exe     installer: the window in installer/shell with the Inno Setup engine inside
 #   shengyi-<version>-portable.exe  the app as a single self-contained exe
 #   shengyi-<version>-src.zip       the source tree
+# <version> comes from shengyi.csproj; check-version.ps1 enforces a version bump + CHANGELOG entry.
 # Needs the .NET 8 SDK and Inno Setup 6. The installer window is compiled with the .NET Framework
 # compiler that comes with Windows.
 param([string]$Version = '')
@@ -11,6 +12,8 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not $Version) {
     $Version = ([xml](Get-Content (Join-Path $root 'shengyi.csproj'))).Project.PropertyGroup.Version | Select-Object -First 1
 }
+# Every feature release must bump <Version> and add a CHANGELOG entry. Refuse to package otherwise.
+& (Join-Path $PSScriptRoot 'check-version.ps1') -ExpectedVersion $Version
 $dist = Join-Path $root 'dist'
 $publish = Join-Path $dist 'publish'
 $engineDir = Join-Path $dist 'engine'
@@ -60,7 +63,7 @@ Remove-Item $engineDir, $publish -Recurse -Force
 Write-Host "== Packing source"
 $src = Join-Path $dist "shengyi-$Version-src"
 New-Item -ItemType Directory $src | Out-Null
-foreach ($item in 'src', 'assets', 'docs', 'scripts', 'installer', 'shengyi.csproj', 'README.md', 'LICENSE', '.gitignore') {
+foreach ($item in 'src', 'assets', 'docs', 'scripts', 'installer', 'shengyi.csproj', 'README.md', 'CHANGELOG.md', 'LICENSE', '.gitignore') {
     Copy-Item (Join-Path $root $item) $src -Recurse
 }
 Compress-Archive -Path $src -DestinationPath (Join-Path $dist "shengyi-$Version-src.zip")

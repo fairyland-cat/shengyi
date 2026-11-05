@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -197,25 +198,47 @@ sealed class ClipboardWatcher
         if (Clipboard.ContainsFileDropList())
         {
             var files = Clipboard.GetFileDropList().Cast<string>().Where(f => !string.IsNullOrEmpty(f)).ToList();
-            if (files.Count > 0) onClip(new ClipItem { Kind = ClipKind.Files, Files = files, Hash = Classify.HashFiles(files) }, null);
+            if (files.Count > 0) onClip(Enrich(new ClipItem { Kind = ClipKind.Files, Files = files, Hash = Classify.HashFiles(files) }), null);
             return;
         }
         if (Clipboard.ContainsText())
         {
             var text = Clipboard.GetText();
             if (string.IsNullOrWhiteSpace(text) || text.Length > MaxText) return;
-            onClip(new ClipItem
+            onClip(Enrich(new ClipItem
             {
                 Kind = Classify.Text(text),
                 Text = text,
                 Html = Rich(TextDataFormat.Html),
                 Rtf = Rich(TextDataFormat.Rtf),
                 Hash = Classify.HashText(text),
-            }, null);
+            }), null);
             return;
         }
         if (Clipboard.ContainsImage() && ReadImage() is { } bmp)
-            onClip(new ClipItem { Kind = ClipKind.Image, Hash = ImageHash.Of(bmp) }, bmp);
+            onClip(Enrich(new ClipItem { Kind = ClipKind.Image, Hash = ImageHash.Of(bmp) }), bmp);
+    }
+
+    // Attach the provenance that makes "只搜浏览器里复制的内容" possible. The owner was already
+    // sampled in Notify(); the format list is best-effort and never blocks a capture.
+    ClipItem Enrich(ClipItem item)
+    {
+        if (!settings().RecordSourceApp) return item;
+        item.SourceApp = owner;
+        item.Formats = ReadFormats();
+        return item;
+    }
+
+    static List<string>? ReadFormats()
+    {
+        try
+        {
+            var names = Clipboard.GetDataObject()?.GetFormats(false) ?? Array.Empty<string>();
+            var list = names.Where(n => !string.IsNullOrWhiteSpace(n) && n.Length <= 64)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Take(24).ToList();
+            return list.Count == 0 ? null : list;
+        }
+        catch (Exception e) when (e is ExternalException or IOException or UnauthorizedAccessException) { return null; }
     }
 
     static string? Rich(TextDataFormat format)

@@ -36,6 +36,13 @@ static class Shots
         windows.Add(line);
         line.Reveal(keyboard: true);
 
+        // A second off-screen line shows the new search drawer and pinyin lookup.
+        var searchLine = new LineWindow(Forms.Screen.PrimaryScreen!, store, actions, () => settings);
+        windows.Add(searchLine);
+        searchLine.Reveal(keyboard: true);
+        searchLine.SetQuery("zhoubao"); // "周报" typed as pinyin
+        searchLine.SetFiltersOpen(true);
+
         var prefs = new SettingsWindow(settings, true, () => { }, () => { })
         {
             WindowStartupLocation = WindowStartupLocation.Manual, Left = -20000, Top = -20000, ShowActivated = false,
@@ -44,9 +51,11 @@ static class Shots
 
         After(1800, () =>
         {
-            Save(Scene(Snapshot((FrameworkElement)line.Content)), System.IO.Path.Combine(folder, "line.png"));
+            Save(Scene(Snapshot((FrameworkElement)line.Content), line.Height), System.IO.Path.Combine(folder, "line.png"));
+            Save(Scene(Snapshot((FrameworkElement)searchLine.Content), searchLine.Height, desktop: false), System.IO.Path.Combine(folder, "search.png"));
             Save((FrameworkElement)prefs.Content, System.IO.Path.Combine(folder, "settings.png"));
             line.Close();
+            searchLine.Close();
             prefs.Close();
             store.Dispose();
             Preview.Render(System.IO.Path.Combine(folder, "cards.png"), done);
@@ -66,9 +75,9 @@ static class Shots
             item.UseTimes = stamps; // oldest first
             item.TotalUses = times;
         }
-        ClipItem Text(string t, bool pin = false, int uses = 0, int hoursAgo = 2)
+        ClipItem Text(string t, bool pin = false, int uses = 0, int hoursAgo = 2, string? app = null)
         {
-            var item = new ClipItem { Kind = Classify.Text(t), Text = t, Hash = Classify.HashText(t) };
+            var item = new ClipItem { Kind = Classify.Text(t), Text = t, Hash = Classify.HashText(t), SourceApp = app };
             store.Add(item);
             if (pin) store.SetPinned(item, true);
             if (uses > 0) Used(item, uses, hoursAgo);
@@ -76,17 +85,17 @@ static class Shots
         }
         Text("绳忆\nshengyi\ngithub.com/fairyland-cat/shengyi", pin: true);
         Text("#25282D", uses: 9, hoursAgo: 10 * 24); // 10 days old: outside the 7-day window
-        Text("https://github.com/fairyland-cat/shengyi", uses: 5, hoursAgo: 3);
+        Text("https://github.com/fairyland-cat/shengyi", uses: 5, hoursAgo: 3, app: "chrome");
         var shot = Picture(DrawScreenshot);
-        store.Add(new ClipItem { Kind = ClipKind.Image, Hash = ImageHash.Of(shot) }, shot);
-        Text("const clips = history.filter(c => c.pinned)\n    .map(c => c.text);\nconsole.log(clips.length);", uses: 3, hoursAgo: 5);
+        store.Add(new ClipItem { Kind = ClipKind.Image, Hash = ImageHash.Of(shot), SourceApp = "snippingtool" }, shot);
+        Text("const clips = history.filter(c => c.pinned)\n    .map(c => c.text);\nconsole.log(clips.length);", uses: 3, hoursAgo: 5, app: "code");
         var files = new List<string> { @"C:\Windows\notepad.exe" };
-        store.Add(new ClipItem { Kind = ClipKind.Files, Files = files, Hash = Classify.HashFiles(files) });
-        Text("rgb(52, 211, 153)");
+        store.Add(new ClipItem { Kind = ClipKind.Files, Files = files, Hash = Classify.HashFiles(files), SourceApp = "explorer" });
+        Text("rgb(52, 211, 153)", app: "figma");
         var photo = Picture(DrawLandscape);
-        store.Add(new ClipItem { Kind = ClipKind.Image, Hash = ImageHash.Of(photo) }, photo);
-        Text("周报：本周完成了剪贴板历史的搜索、固定和卡片样式，下周开始做安装包和使用文档。", uses: 8);
-        Text("下周一上午十点，三楼会议室，讨论第四季度发布计划。", uses: 1);
+        store.Add(new ClipItem { Kind = ClipKind.Image, Hash = ImageHash.Of(photo), SourceApp = "snippingtool" }, photo);
+        Text("周报：本周完成了剪贴板历史的搜索、固定和卡片样式，下周开始做安装包和使用文档。", uses: 8, app: "notepad");
+        Text("下周一上午十点，三楼会议室，讨论第四季度发布计划。", uses: 1, app: "outlook");
         void Note(string t, string color) =>
             store.AddSticky(new ClipItem { Kind = ClipKind.Sticky, Text = t, NoteColor = color });
         Note("待办：\n· 预约体检\n· 回复设计稿", "#DDEBFA");
@@ -94,7 +103,8 @@ static class Shots
     }
 
     // A mock desktop: soft wallpaper, a document window you'd paste into, and the line across the top.
-    static FrameworkElement Scene(BitmapSource lineImage)
+    // The search screenshot leaves out the document window so the filter drawer stays legible.
+    static FrameworkElement Scene(BitmapSource lineImage, double lineHeight, bool desktop = true)
     {
         var root = new Canvas { Width = SceneWidth, Height = SceneHeight, ClipToBounds = true };
         root.Background = new LinearGradientBrush(Color.FromRgb(0xE4, 0xEB, 0xF5), Color.FromRgb(0xF1, 0xEA, 0xF3), 35);
@@ -106,30 +116,33 @@ static class Shots
             root.Children.Add(blob);
         }
 
-        var doc = new StackPanel { Margin = new Thickness(40, 30, 40, 0) };
-        // The mock document is always white, so its ink must not follow the dark theme.
-        doc.Children.Add(Theme.Text("第四季度发布计划", 22, Color.FromRgb(0x25, 0x28, 0x2D), bold: true));
-        foreach (var w in new[] { 0.92, 0.85, 0.6 })
-            doc.Children.Add(new Border { Height = 9, CornerRadius = new CornerRadius(4), Background = Theme.B(Color.FromRgb(0xE6, 0xEA, 0xF0)), Width = 720 * w, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 18, 0, 0) });
-        var caret = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 22, 0, 0) };
-        caret.Children.Add(Theme.Text("会议时间：", 15, Color.FromRgb(0x5B, 0x66, 0x75)));
-        caret.Children.Add(new Border { Width = 2, Height = 20, Background = Theme.B(Color.FromRgb(0x3B, 0x82, 0xF6)) });
-        doc.Children.Add(caret);
-        var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(18, 14, 0, 0) };
-        foreach (var c in new[] { Color.FromRgb(0xF8, 0x71, 0x71), Color.FromRgb(0xFB, 0xBF, 0x24), Color.FromRgb(0x34, 0xD3, 0x99) })
-            bar.Children.Add(new System.Windows.Shapes.Ellipse { Width = 11, Height = 11, Fill = new SolidColorBrush(c), Margin = new Thickness(0, 0, 7, 0) });
-        var window = new Border
+        if (desktop)
         {
-            Width = 900, Height = 300, CornerRadius = new CornerRadius(14), Background = Brushes.White,
-            BorderBrush = Theme.B(Color.FromRgb(0xE9, 0xED, 0xF2)), BorderThickness = new Thickness(1),
-            Effect = new DropShadowEffect { BlurRadius = 40, ShadowDepth = 10, Opacity = 0.12, Color = Color.FromRgb(0x27, 0x34, 0x49) },
-            Child = new StackPanel { Children = { bar, doc } },
-        };
-        Canvas.SetLeft(window, (SceneWidth - 900) / 2);
-        Canvas.SetTop(window, 246);
-        root.Children.Add(window);
+            var doc = new StackPanel { Margin = new Thickness(40, 30, 40, 0) };
+            // The mock document is always white, so its ink must not follow the dark theme.
+            doc.Children.Add(Theme.Text("第四季度发布计划", 22, Color.FromRgb(0x25, 0x28, 0x2D), bold: true));
+            foreach (var w in new[] { 0.92, 0.85, 0.6 })
+                doc.Children.Add(new Border { Height = 9, CornerRadius = new CornerRadius(4), Background = Theme.B(Color.FromRgb(0xE6, 0xEA, 0xF0)), Width = 720 * w, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 18, 0, 0) });
+            var caret = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 22, 0, 0) };
+            caret.Children.Add(Theme.Text("会议时间：", 15, Color.FromRgb(0x5B, 0x66, 0x75)));
+            caret.Children.Add(new Border { Width = 2, Height = 20, Background = Theme.B(Color.FromRgb(0x3B, 0x82, 0xF6)) });
+            doc.Children.Add(caret);
+            var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(18, 14, 0, 0) };
+            foreach (var c in new[] { Color.FromRgb(0xF8, 0x71, 0x71), Color.FromRgb(0xFB, 0xBF, 0x24), Color.FromRgb(0x34, 0xD3, 0x99) })
+                bar.Children.Add(new System.Windows.Shapes.Ellipse { Width = 11, Height = 11, Fill = new SolidColorBrush(c), Margin = new Thickness(0, 0, 7, 0) });
+            var window = new Border
+            {
+                Width = 900, Height = 300, CornerRadius = new CornerRadius(14), Background = Brushes.White,
+                BorderBrush = Theme.B(Color.FromRgb(0xE9, 0xED, 0xF2)), BorderThickness = new Thickness(1),
+                Effect = new DropShadowEffect { BlurRadius = 40, ShadowDepth = 10, Opacity = 0.12, Color = Color.FromRgb(0x27, 0x34, 0x49) },
+                Child = new StackPanel { Children = { bar, doc } },
+            };
+            Canvas.SetLeft(window, (SceneWidth - 900) / 2);
+            Canvas.SetTop(window, 246);
+            root.Children.Add(window);
+        }
 
-        var lineView = new Image { Source = lineImage, Width = SceneWidth, Height = LineWindow.PanelHeight };
+        var lineView = new Image { Source = lineImage, Width = SceneWidth, Height = lineHeight };
         root.Children.Add(lineView);
         root.Measure(new Size(SceneWidth, SceneHeight));
         root.Arrange(new Rect(0, 0, SceneWidth, SceneHeight));

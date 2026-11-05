@@ -47,6 +47,34 @@ static class S
     public static string KeysHelpPaste => T("Enter paste · Shift+Enter copy · Ctrl+P pin · Del delete · Esc close",
                                             "Enter 粘贴 · Shift+Enter 复制 · Ctrl+P 固定 · Del 删除 · Esc 关闭");
 
+    // Advanced search & filters
+    public static string FilterGearTip => T("Advanced filters", "高级筛选");
+    public static string FilterSource => T("Source", "来源");
+    public static string FilterKind => T("Type", "类型");
+    public static string FilterTime => T("When", "时间");
+    public static string FilterAny => T("Any", "不限");
+    public static string FilterToday => T("Today", "今天");
+    public static string FilterDays7 => T("7 days", "7 天内");
+    public static string FilterDays30 => T("30 days", "30 天内");
+    public static string FilterClear => T("Clear filters", "清除筛选");
+    public static string FilterNoApps => T("No source recorded yet", "暂无来源记录");
+    public static string FilterResult => T("{0} results", "{0} 条结果");
+    public static string FilterHint => T("Pinyin works · try app:chrome, tag:phone, kind:image, in:7d",
+                                         "支持拼音 · 可用 app:chrome、tag:phone、kind:图片、in:7d");
+    public static string[] FilterKindNames => new[]
+    {
+        T("Text", "文字"), T("Code", "代码"), T("Links", "链接"), T("Colours", "颜色"),
+        T("Images", "图片"), T("Files", "文件"), T("Notes", "便签"),
+    };
+    public static string SourceTip => T("From {0}", "来自 {0}");
+    public static string SectionSearch => T("Search", "搜索");
+    public static string RecordSourceTitle => T("Record source app", "记录来源应用");
+    public static string RecordSourceNote => T("Remember which program each copy came from and which clipboard formats it used. Nothing leaves this computer.",
+                                               "记住每条内容从哪个程序复制、使用了哪些剪贴板格式；数据只保存在本机。");
+    public static string FuzzyTitle => T("Fuzzy matching", "模糊匹配");
+    public static string FuzzyNote => T("When nothing matches exactly, try an ordered letter match (gaps allowed).",
+                                        "没有精确结果时，尝试按顺序但允许间隔的字母匹配。");
+
     // Item menu
     public static string Copy => T("Copy", "复制");
     public static string Paste => T("Paste", "粘贴");

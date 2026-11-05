@@ -235,6 +235,10 @@ sealed class SettingsWindow : ChromeWindow
         click.Changed += () => Result.PasteOnClick = click.Selected == 1;
         var edge = new Toggle(Result.RevealAtTopEdge);
         edge.Changed += () => Result.RevealAtTopEdge = edge.IsOn;
+        var recordSource = new Toggle(Result.RecordSourceApp);
+        recordSource.Changed += () => Result.RecordSourceApp = recordSource.IsOn;
+        var fuzzy = new Toggle(Result.FuzzySearch);
+        fuzzy.Changed += () => Result.FuzzySearch = fuzzy.IsOn;
         var startup = new Toggle(startWithWindows);
         startup.Changed += () => StartWithWindows = startup.IsOn;
         var max = Fields.Stepper(Result.MaxItems, 50, 2000, 50, v => Result.MaxItems = v);
@@ -310,9 +314,12 @@ sealed class SettingsWindow : ChromeWindow
             Row(S.CardColorCustom, null, hexField))));
 
         var right = new StackPanel();
-        right.Children.Add(Card(S.SectionRanking,
+        right.Children.Add(Card(S.SectionSearch,
+            Row(S.RecordSourceTitle, S.RecordSourceNote, recordSource),
+            Row(S.FuzzyTitle, S.FuzzyNote, fuzzy)));
+        right.Children.Add(Spaced(Card(S.SectionRanking,
             Row(S.FreqThresholdTitle, S.FreqThresholdNote, freqThreshold),
-            Row(S.FreqWindowTitle, S.FreqWindowNote, freqWindow)));
+            Row(S.FreqWindowTitle, S.FreqWindowNote, freqWindow))));
         right.Children.Add(Spaced(Card(S.SectionHistory,
             Row(S.MaxItems, S.MaxItemsNote, max),
             Stacked(S.Retention, null, retention))));

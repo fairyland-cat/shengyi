@@ -23,6 +23,11 @@ sealed class Settings
     public int RetentionDays { get; set; }                 // 0 = keep forever
     public List<string> ExcludedApps { get; set; } = new() { "1Password", "Bitwarden", "KeePass", "KeePassXC" };
 
+    // Search. Both are local-only: no data leaves the machine, and turning them off keeps the
+    // old behaviour (plain substring search, no provenance written into clips.json).
+    public bool RecordSourceApp { get; set; } = true;  // also stores the clipboard format list
+    public bool FuzzySearch { get; set; } = true;      // subsequence fallback when nothing matches
+
     // Appearance. Defaults reproduce the original 绳忆 look exactly.
     public string ThemeName { get; set; } = "soft";        // soft | silver | linen | porcelain | graphite
     public string Accent { get; set; } = "blue";           // blue | terra | mint | navy

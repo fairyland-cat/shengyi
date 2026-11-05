@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -32,9 +34,19 @@ sealed class CardView : Grid
     readonly RotateTransform rotate = new();
     readonly DropShadowEffect shadow = new() { BlurRadius = 16, ShadowDepth = 4, Direction = 270, Opacity = 0.26 };
     readonly DispatcherTimer holdTimer = new() { Interval = TimeSpan.FromMilliseconds(550) };
+    static readonly SolidColorBrush HighlightBrush = MakeHighlightBrush();
+    TextBlock? bodyText;
+    string bodyFull = "", highlight = "";
     Point downAt;
     bool pressed, hover, selected;
     int shownNumber = -1;
+
+    static SolidColorBrush MakeHighlightBrush()
+    {
+        var brush = new SolidColorBrush(Color.FromArgb(0x90, 0xFF, 0xD5, 0x4F));
+        brush.Freeze();
+        return brush;
+    }
 
     // Unscaled card size; only the line's layout uses the scaled SizeOf below.
     public static Size BaseSizeOf(ClipItem item) => item.Kind switch
@@ -114,6 +126,8 @@ sealed class CardView : Grid
                 : Item.TotalUses == 0 ? S.UsageNone
                 : string.Format(S.UsageTip, Theme.FreqWindowDays,
                     Item.CountUses(Theme.FreqWindowDays), Item.TotalUses);
+            if (!string.IsNullOrEmpty(Item.SourceApp))
+                tipText.Text += "  ·  " + string.Format(S.SourceTip, Item.SourceApp);
         };
         ToolTipService.SetToolTip(frame, tip);
 
@@ -217,6 +231,7 @@ sealed class CardView : Grid
         Children.Add(number);
         Children.Add(close);
         Restyle();
+        ApplyHighlight();
 
         MouseEnter += (_, _) =>
         {
@@ -269,6 +284,60 @@ sealed class CardView : Grid
             numberText.Text = value.ToString();
             number.Visibility = value > 0 ? Visibility.Visible : Visibility.Collapsed;
         }
+    }
+
+    // Words from the search box, painted on the card body. The same CardView is reused while
+    // the query changes, so this rebuilds only the Inlines of the body TextBlock.
+    public string Highlight
+    {
+        get => highlight;
+        set
+        {
+            string next = value ?? "";
+            if (next == highlight) return;
+            highlight = next;
+            ApplyHighlight();
+        }
+    }
+
+    void CaptureBody(UIElement element, string full)
+    {
+        bodyFull = full;
+        bodyText = (element as DockPanel)?.Tag as TextBlock;
+    }
+
+    void ApplyHighlight()
+    {
+        if (bodyText == null) return;
+        var inlines = bodyText.Inlines;
+        inlines.Clear();
+        string text = bodyFull;
+        if (text.Length == 0 || highlight.Length == 0) { inlines.Add(new Run(text)); return; }
+
+        var spans = new List<(int start, int end)>();
+        foreach (var term in highlight.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            int from = 0;
+            while (from <= text.Length - term.Length)
+            {
+                int at = text.IndexOf(term, from, StringComparison.OrdinalIgnoreCase);
+                if (at < 0) break;
+                spans.Add((at, at + term.Length));
+                from = at + Math.Max(1, term.Length);
+            }
+        }
+        if (spans.Count == 0) { inlines.Add(new Run(text)); return; }
+        spans.Sort((a, b) => a.start != b.start ? a.start.CompareTo(b.start) : b.end.CompareTo(a.end));
+
+        int cursor = 0;
+        foreach (var (start, end) in spans)
+        {
+            if (start < cursor) continue; // overlapping hit: the earlier run already covers it
+            if (start > cursor) inlines.Add(new Run(text[cursor..start]));
+            inlines.Add(new Run(text[start..end]) { Background = HighlightBrush });
+            cursor = end;
+        }
+        if (cursor < text.Length) inlines.Add(new Run(text[cursor..]));
     }
 
     // Selected cards and the one under the pointer lift a little: bigger, deeper shadow, on top.
@@ -332,8 +401,10 @@ sealed class CardView : Grid
                 var dots = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
                 foreach (var c in new[] { Color.FromRgb(0xF8, 0x71, 0x71), Color.FromRgb(0xFB, 0xBF, 0x24), Color.FromRgb(0x34, 0xD3, 0x99) })
                     dots.Children.Add(new Border { Width = 6, Height = 6, CornerRadius = new CornerRadius(3), Background = new SolidColorBrush(c), Margin = new Thickness(0, 0, 4, 0) });
-                return Note(preview, string.Format(S.Lines, lines.Length), Theme.B(p.CodeInk), Theme.B(p.CodeDim),
+                var code = Note(preview, string.Format(S.Lines, lines.Length), Theme.B(p.CodeInk), Theme.B(p.CodeDim),
                     wrap: false, mono: true, rich: false, header: dots);
+                CaptureBody(code, preview);
+                return code;
             }
             case ClipKind.Link:
             {
@@ -467,14 +538,17 @@ sealed class CardView : Grid
                 var dock = new DockPanel();
                 DockPanel.SetDock(head, Dock.Top);
                 dock.Children.Add(head);
-                dock.Children.Add(new TextBlock
+                var noteBody = new TextBlock
                 {
                     Text = text.Length == 0 ? S.StickyEmpty : text,
                     FontSize = 12, LineHeight = 16.5,
                     TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis,
                     Foreground = Theme.B(n.ink),
                     Opacity = text.Length == 0 ? 0.65 : 1,
-                });
+                };
+                bodyFull = noteBody.Text;
+                bodyText = noteBody;
+                dock.Children.Add(noteBody);
                 var grid = new Grid();
                 grid.Children.Add(dock);
                 grid.Children.Add(new System.Windows.Shapes.Path // folded bottom-right corner
@@ -495,8 +569,10 @@ sealed class CardView : Grid
                 frame.Padding = new Thickness(11, 9, 11, 6);
                 var text = (item.Text ?? "").Trim().Replace("\r\n", "\n").Replace('\t', ' ');
                 if (text.Length > 300) text = text[..300];
-                return Note(text, string.Format(S.Chars, (item.Text ?? "").Length), Theme.B(p.PaperInk), Theme.B(p.PaperDim),
+                var paper = Note(text, string.Format(S.Chars, (item.Text ?? "").Length), Theme.B(p.PaperInk), Theme.B(p.PaperDim),
                     wrap: true, mono: false, rich: item.IsRich, header: null);
+                CaptureBody(paper, text);
+                return paper;
             }
         }
     }
@@ -536,6 +612,7 @@ sealed class CardView : Grid
         };
         if (mono) body.FontFamily = new FontFamily("Consolas");
         dock.Children.Add(body);
+        dock.Tag = body; // CardView uses this to paint search hits
         return dock;
     }
 

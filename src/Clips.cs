@@ -20,7 +20,9 @@ namespace Shengyi;
 enum ClipKind { Text, Link, Code, Color, Image, Files, Sticky }
 
 // One thing that was copied. Text lives in the index; images are PNG files in the Images folder.
-sealed class ClipItem
+// Searchable-text extraction lives in ClipText.cs (a partial class kept dependency-free so the
+// index can be exercised without WPF).
+sealed partial class ClipItem
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public ClipKind Kind { get; set; }
@@ -35,6 +37,13 @@ sealed class ClipItem
     public DateTime Time { get; set; }
     public string Hash { get; set; } = "";
     public string? NoteColor { get; set; }            // sticky notes only; null / "auto" follows the theme
+
+    // Where the copy came from, the formats the owning app exposed, and any smart tags.
+    // All optional: clips.json written by older versions loads unchanged.
+    public string? SourceApp { get; set; }            // process name without .exe, e.g. "chrome"
+    public List<string>? Formats { get; set; }        // clipboard format names, e.g. "HTML Format"
+    public List<string>? Tags { get; set; }           // smart tags, e.g. "tag:phone"
+    public string? FileCategory { get; set; }         // file cards: media / archive / document / ...
 
     // How often the card was taken from 绳忆. TotalUses never decreases; UseTimes holds the UTC
     // Unix-millisecond stamps of the last 90 days, oldest first, so a rolling window can be
@@ -65,8 +74,6 @@ sealed class ClipItem
         return n; // oldest first, so the first stale stamp ends the scan
     }
 
-    public string SearchText() =>
-        Kind == ClipKind.Files ? string.Join(" ", (Files ?? new()).Select(f => Path.GetFileName(f))) : Text ?? "";
 }
 
 static class Classify
@@ -165,6 +172,18 @@ sealed class ClipStore : IDisposable
     public event Action<ClipItem>? Updated; // pinned or edited: its card needs redrawing
     public event Action? UsageReset;       // statistics cleared: re-sort right away
 
+    // A rebuildable index, never persisted: clips.json stays the only source of truth. Version
+    // changes whenever the item list or any searchable text changes, so the index is rebuilt
+    // only then — not on every keystroke in the search box.
+    public SearchIndex Index { get; } = new();
+    public int Version { get; private set; }
+
+    public List<(ClipItem item, double score)> Search(SearchQuery q)
+    {
+        Index.Refresh(Items, Version);
+        return Index.Search(q, settings().FuzzySearch);
+    }
+
     const int MaxUseTimes = 2000;          // safety cap per card
     const int KeepUseDays = 90;            // longest selectable window
 
@@ -181,6 +200,7 @@ sealed class ClipStore : IDisposable
         Directory.CreateDirectory(ImageDir);
         saveTimer.Tick += (_, _) => { saveTimer.Stop(); Save(); };
         sweepTimer.Tick += (_, _) => Sweep();
+        Items.CollectionChanged += (_, _) => Version++; // add / remove / move invalidates the index
         Load();
         ImportOldLine();
         Sweep();
@@ -265,6 +285,7 @@ sealed class ClipStore : IDisposable
         item.Text = text;
         item.NoteColor = color;
         item.Html = item.Rtf = null;
+        Version++;                 // the note's words are indexed
         Updated?.Invoke(item);
         ScheduleSave();
     }
@@ -304,6 +325,7 @@ sealed class ClipStore : IDisposable
         item.Html = item.Rtf = null;
         item.Kind = Classify.Text(text);
         item.Hash = Classify.HashText(text);
+        Version++;                 // edited text changes the indexed words
         Updated?.Invoke(item);
         ScheduleSave();
     }

@@ -23,7 +23,9 @@ sealed class LineWindow : Window
 {
     const double LineTop = 7, CardTop = 1, Gap = 18, PinGap = 40, SideMargin = 48, Fade = 36;
     const int FilterCount = 7;
+    const double FilterTopGap = 40;
     static double Sag => Theme.RopeSag;
+    static double FilterBottom => BarTop + FilterTopGap + SearchFilterPanel.PanelHeight;
 
     // Grow the strip when the rope dips further or the cards are enlarged, so nothing is clipped.
     // The keyboard bar sits below the deepest possible card, not at a fixed offset.
@@ -51,6 +53,8 @@ sealed class LineWindow : Window
     readonly StackPanel bar = new() { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed };
     readonly TextBox search;
     readonly TextBlock placeholder, keysHelp;
+    readonly SearchFilterPanel filterPanel;
+    readonly Border gear;
     readonly List<(Filter filter, Border tab, TextBlock label)> tabs = new();
     readonly Dictionary<ClipItem, CardView> views = new();
     readonly Random rng = new();
@@ -60,7 +64,8 @@ sealed class LineWindow : Window
     int selected;
     Filter filter;
     IntPtr hwnd;
-    bool ticking;
+    bool ticking, filterOpen;
+    string highlight = "";
     TimeSpan lastFrame;
 
     public LineWindow(Forms.Screen screen, ClipStore store, Actions actions, Func<Settings> settings)
@@ -82,7 +87,7 @@ sealed class LineWindow : Window
         ShowActivated = false;
         Width = b.Width / Scale;
         Height = PanelHeight;
-        slide.Y = -PanelHeight;
+        slide.Y = -Height;
 
         rope = new Path
         {
@@ -123,9 +128,36 @@ sealed class LineWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 8, 0),
         };
+        // The gear opens the advanced filter drawer; it lives inside the search field so the
+        // crowded keyboard bar doesn't need another full-size control.
+        gear = new Border
+        {
+            Width = 24,
+            Height = 24,
+            CornerRadius = new CornerRadius(12),
+            Cursor = Cursors.Hand,
+            Margin = new Thickness(8, 0, 0, 0),
+            ToolTip = S.FilterGearTip,
+            Child = new TextBlock
+            {
+                Text = "",
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontSize = 13,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        gear.MouseLeftButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            SetFiltersOpen(!filterOpen);
+            if (KeyboardMode) search.Focus();
+        };
         var searchRow = new DockPanel();
         DockPanel.SetDock(glyph, Dock.Left);
         searchRow.Children.Add(glyph);
+        DockPanel.SetDock(gear, Dock.Right);
+        searchRow.Children.Add(gear);
         searchRow.Children.Add(new Grid { Children = { placeholder, search } });
         searchBar = new Border { CornerRadius = new CornerRadius(15), Padding = new Thickness(12, 5, 12, 5), Child = searchRow };
         bar.Children.Add(searchBar);
@@ -164,12 +196,18 @@ sealed class LineWindow : Window
         Canvas.SetLeft(bar, SideMargin);
         Canvas.SetTop(bar, BarTop);
 
+        filterPanel = new SearchFilterPanel { Visibility = Visibility.Collapsed };
+        filterPanel.Changed += () => { selected = 0; target = 0; Relayout(false); };
+        Canvas.SetLeft(filterPanel, SideMargin);
+        Canvas.SetTop(filterPanel, BarTop + FilterTopGap);
+
         strip.RenderTransform = scroll;
         viewport.Children.Add(strip);
         shelf.Children.Add(rope);
         shelf.Children.Add(viewport);
         shelf.Children.Add(hint);
         shelf.Children.Add(bar);
+        shelf.Children.Add(filterPanel);
         shelf.RenderTransform = slide;
         Content = new Grid { ClipToBounds = true, Children = { shelf } };
 
@@ -208,11 +246,11 @@ sealed class LineWindow : Window
         Scale = Native.ScaleAt(b.Left + b.Width / 2, b.Top + b.Height / 2);
         if (Stage is { } stage)
         {
-            Native.SetWindowPos(hwnd, IntPtr.Zero, -32000, -32000, (int)(stage.Width * Scale), (int)Math.Ceiling(PanelHeight * Scale), Native.SWP_NOACTIVATE);
+            Native.SetWindowPos(hwnd, IntPtr.Zero, -32000, -32000, (int)(stage.Width * Scale), (int)Math.Ceiling(Height * Scale), Native.SWP_NOACTIVATE);
             return;
         }
         Native.SetWindowPos(hwnd, Native.HWND_TOPMOST, b.Left, b.Top, b.Width,
-            (int)Math.Ceiling(PanelHeight * Scale), Native.SWP_NOACTIVATE);
+            (int)Math.Ceiling(Height * Scale), Native.SWP_NOACTIVATE);
     }
 
     protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
@@ -234,6 +272,8 @@ sealed class LineWindow : Window
             selected = 0;
             target = offset = 0;
             scroll.X = 0;
+            filterPanel.Reset();
+            SetFiltersOpen(false, false);
             search.Text = "";
         }
         bar.Visibility = keyboard ? Visibility.Visible : Visibility.Collapsed;
@@ -263,7 +303,7 @@ sealed class LineWindow : Window
         IsOut = false;
         KeyboardMode = false;
         SetActivatable(false);
-        SlideTo(-PanelHeight, EasingMode.EaseIn, 200, () => { if (!IsOut) Hide(); });
+        SlideTo(-Height, EasingMode.EaseIn, 200, () => { if (!IsOut) Hide(); });
     }
 
     // Keyboard mode needs focus; otherwise the line must never steal it from the app you're working in.
@@ -311,12 +351,13 @@ sealed class LineWindow : Window
         foreach (var v in views.Values) v.Detach();
         views.Clear();
         strip.Children.Clear();
-        Height = PanelHeight;
+        UpdateWindowHeight();
         Canvas.SetTop(bar, BarTop);
+        Canvas.SetTop(filterPanel, BarTop + FilterTopGap);
         UpdateChrome();
         if (hwnd != IntPtr.Zero) Place();
         Relayout(false);
-        if (!IsOut) slide.Y = -PanelHeight;
+        if (!IsOut) slide.Y = -Height;
     }
 
     void UpdateChrome()
@@ -331,8 +372,36 @@ sealed class LineWindow : Window
         search.CaretBrush = Theme.B(p.PanelInk);
         placeholder.Foreground = Theme.B(Theme.WithAlpha(p.PanelInk, 0x99));
         keysHelp.Foreground = Theme.B(Theme.WithAlpha(p.PanelInk, 0xCC));
+        gear.Background = filterOpen ? Theme.B(Theme.P.TabOn) : Brushes.Transparent;
+        ((TextBlock)gear.Child).Foreground = filterOpen ? Theme.B(Theme.P.TabOnInk) : Theme.B(p.PanelInk);
+        filterPanel.Restyle();
         UpdateTabs();
     }
+
+    // Opening the drawer makes the strip taller; the window, the hover zone and the viewport
+    // all follow the same height so the panel is never clipped or left outside the hit area.
+    void UpdateWindowHeight()
+    {
+        Height = Math.Max(PanelHeight, filterOpen ? FilterBottom + 16 : 0);
+        if (hwnd != IntPtr.Zero) Place();
+    }
+
+    public void SetFiltersOpen(bool open, bool relayout = true)
+    {
+        filterOpen = open;
+        filterPanel.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+        gear.Background = open ? Theme.B(Theme.P.TabOn) : Brushes.Transparent;
+        ((TextBlock)gear.Child).Foreground = open ? Theme.B(Theme.P.TabOnInk) : Theme.B(Theme.P.PanelInk);
+        if (open)
+            filterPanel.SetApps(store.Items.Where(i => i.SourceApp != null)
+                .GroupBy(i => i.SourceApp!, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(g => g.Count()).Select(g => g.Key));
+        UpdateWindowHeight();
+        if (relayout) { selected = 0; target = 0; Relayout(false); }
+    }
+
+    // Used by the off-screen screenshots, and handy for any future automation.
+    public void SetQuery(string text) => search.Text = text;
 
     void SetFilter(Filter f)
     {
@@ -357,21 +426,35 @@ sealed class LineWindow : Window
 
     List<ClipItem> Visible()
     {
-        var q = KeyboardMode ? search.Text.Trim() : "";
-        var f = KeyboardMode ? filter : Filter.All;
-        bool Match(ClipItem i) =>
-            (f switch
-            {
-                Filter.Text => i.Kind is ClipKind.Text or ClipKind.Code or ClipKind.Color or ClipKind.Sticky,
-                Filter.Images => i.Kind == ClipKind.Image,
-                Filter.Links => i.Kind == ClipKind.Link,
-                Filter.Files => i.Kind == ClipKind.Files,
-                Filter.Pinned => i.Pinned,
-                Filter.Sticky => i.IsSticky,
-                _ => true,
-            }) && (q.Length == 0 || i.SearchText().Contains(q, StringComparison.OrdinalIgnoreCase));
+        if (!KeyboardMode)
+        {
+            highlight = "";
+            return Ranking.Order(store.Items);
+        }
+
+        var q = SearchQuery.Parse(search.Text, filterPanel.SelectedApps,
+                                  filterPanel.SelectedKinds, filterPanel.WithinDays);
+        q.AddTab(filter);
+        highlight = q.Highlight;
+
+        IEnumerable<ClipItem> match;
+        Dictionary<ClipItem, double>? scores = null;
+        if (q.HasTerms || q.HasFilters)
+        {
+            var hits = store.Search(q);
+            match = hits.Select(h => h.item);
+            scores = hits.ToDictionary(h => h.item, h => h.score);
+        }
+        else match = store.Items;
+
         // Only this view order changes; Items keeps its physical order for dedup, Sweep() and JSON.
-        return Ranking.Order(store.Items.Where(Match));
+        var ranked = Ranking.Order(match);
+        if (!q.HasTerms || scores == null) return ranked; // filters alone keep the frequency order
+        return ranked
+            .OrderBy(i => i.IsFront ? 0 : 1)             // pinned cards and notes always lead
+            .ThenByDescending(i => scores.TryGetValue(i, out double s) ? s : 0)
+            .ThenByDescending(i => i.Time)
+            .ToList();
     }
 
     // The rope is a quadratic Bezier; at horizontal position x its dip is 4*Sag*t*(1-t).
@@ -402,10 +485,11 @@ sealed class LineWindow : Window
         fig.Segments.Add(new QuadraticBezierSegment(new Point(W / 2, LineTop + 2 * Sag), new Point(W, LineTop), true));
         rope.Data = new PathGeometry(new[] { fig });
         viewport.Width = W;
-        viewport.Height = PanelHeight;
+        viewport.Height = Height;
 
         // Pinned cards first, then a longer stretch of bare line, then the history.
         order = Visible();
+        filterPanel.SetCount(order.Count);
         xs = new double[order.Count];
         double x = SideMargin, tallest = 0;
         for (int i = 0; i < order.Count; i++)
@@ -442,7 +526,7 @@ sealed class LineWindow : Window
         }
         double cards = order.Count == 0 ? LineTop + Sag + 12 + hint.DesiredSize.Height
             : CardTop + Sag + CardView.PegDropScaled + tallest + 6;
-        contentBottom = KeyboardMode ? BarTop + 34 : cards;
+        contentBottom = KeyboardMode ? (filterOpen ? FilterBottom : BarTop + 34) : cards;
     }
 
     // Only cards near the visible stretch exist as elements; the history can be long.
@@ -457,7 +541,11 @@ sealed class LineWindow : Window
             bool has = views.ContainsKey(item);
             if (want && !has)
             {
-                var v = new CardView(item, actions) { Velocity = (rng.Next(2) == 0 ? -1 : 1) * 40 };
+                var v = new CardView(item, actions)
+                {
+                    Velocity = (rng.Next(2) == 0 ? -1 : 1) * 40,
+                    Highlight = highlight,
+                };
                 views[item] = v;
                 strip.Children.Add(v);
                 Canvas.SetLeft(v, xs[i]);
@@ -484,6 +572,7 @@ sealed class LineWindow : Window
             if (!views.TryGetValue(order[i], out var v)) continue;
             v.Number = KeyboardMode && i < 9 ? i + 1 : 0;
             v.Selected = KeyboardMode && i == selected;
+            v.Highlight = highlight;
         }
         double W = viewport.Width;
         if (W <= 0 || maxOffset <= 0) { viewport.OpacityMask = null; return; }
@@ -537,7 +626,8 @@ sealed class LineWindow : Window
         switch (key)
         {
             case Key.Escape:
-                if (!empty) search.Clear();
+                if (filterOpen) SetFiltersOpen(false);
+                else if (!empty) search.Clear();
                 else Dismissed?.Invoke();
                 break;
             case Key.Left: Select(selected - 1); break;
