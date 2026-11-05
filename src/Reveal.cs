@@ -14,6 +14,7 @@ sealed class RevealController
 {
     static readonly TimeSpan Dwell = TimeSpan.FromMilliseconds(320), Linger = TimeSpan.FromMilliseconds(400);
     const double CloseButtonCorner = 140; // DIPs at the top-right left alone for maximized windows' ✕
+    const double EdgeDepth = 5;           // DIPs of hot strip along the very top, scaled to physical pixels
 
     readonly Func<IReadOnlyList<LineWindow>> windows;
     readonly Func<bool> edgeEnabled;
@@ -86,7 +87,7 @@ sealed class RevealController
 
         var here = windows().FirstOrDefault(w => w.Screen.Bounds.Contains(p.X, p.Y));
         bool atEdge = here != null
-            && p.Y <= here.Screen.Bounds.Top + 1
+            && p.Y <= here.Screen.Bounds.Top + Math.Max(2, EdgeDepth * here.Scale)
             && p.X < here.Screen.Bounds.Right - CloseButtonCorner * here.Scale;
         if (!atEdge) { armed = true; edgeSince = null; return; }
         if (!edgeEnabled() || !armed || button || FullScreen.Covers(here!.Screen)) { edgeSince = null; return; }
@@ -105,8 +106,10 @@ static class FullScreen
 {
     public static bool Covers(Forms.Screen screen)
     {
-        // QUNS_RUNNING_D3D_FULL_SCREEN = 3, QUNS_PRESENTATION_MODE = 5
-        if (Native.SHQueryUserNotificationState(out var state) == 0 && state is 3 or 5) return true;
+        // QUNS_BUSY = 2, QUNS_RUNNING_D3D_FULL_SCREEN = 3, QUNS_PRESENTATION_MODE = 4.
+        // 5 is QUNS_ACCEPTS_NOTIFICATIONS, i.e. the ordinary desktop; treating it as full
+        // screen would suppress the top edge permanently.
+        if (Native.SHQueryUserNotificationState(out var state) == 0 && state is 2 or 3 or 4) return true;
 
         var fg = Native.GetForegroundWindow();
         if (fg == IntPtr.Zero || fg == Native.GetShellWindow() || fg == Native.GetDesktopWindow()) return false;

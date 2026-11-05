@@ -1,6 +1,6 @@
 # 绳忆 (shengyi)
 
-> **致谢**：绳忆的「晾衣绳」绳忆 (Shengyi) — 基于 DUN 改造的 Windows 剪贴板管理器，扩展了主题配色、按取用频率排序、便签等功能。
+> **致谢**：绳忆的「晾衣绳」交互灵感来自 [Tenderedo](https://github.com/alejandrobujan/tendedero)——[Alejandro Buján](https://github.com/alejandrobujan) 做的 macOS 小工具：截过的图像像照片一样挂在屏幕顶部的晾衣绳上。这个点子太可爱了，可惜只有 Mac 版。绳忆把它带到了 Windows，并扩展了主题配色、按取用频率排序、便签等功能。
 
 **把剪贴板历史晾在一根绳上。**
 
