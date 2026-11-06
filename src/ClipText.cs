@@ -57,7 +57,12 @@ sealed partial class ClipItem
                 string name = SmartTags.Name(tag);   // "手机号" as well as "phone"
                 if (!string.Equals(name, tag, System.StringComparison.OrdinalIgnoreCase)) parts.Add(name);
             }
-        if (!string.IsNullOrEmpty(FileCategory)) parts.Add(FileCategory);
+        if (!string.IsNullOrEmpty(FileCategory))
+        {
+            parts.Add(FileCategory);
+            string category = FileCategories.Name(FileCategory); // "压缩包" as well as "archive"
+            if (!string.Equals(category, FileCategory, StringComparison.OrdinalIgnoreCase)) parts.Add(category);
+        }
         if ((int)Kind >= 0 && (int)Kind < KindWords.Length) parts.Add(KindWords[(int)Kind]);
         return string.Join(" ", parts);
     }

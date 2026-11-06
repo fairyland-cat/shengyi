@@ -96,6 +96,38 @@ static class Native
         SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
     }
 
+    const uint KEYEVENTF_KEYUP = 0x0002, KEYEVENTF_UNICODE = 0x0004;
+
+    // Types text into whatever control has focus, character by character, without ever opening
+    // the clipboard. With KEYEVENTF_UNICODE, wVk must be 0 and wScan carries the UTF-16 unit;
+    // this also works for Chinese text, independent of the active keyboard layout. Long strings
+    // go in chunks so a single SendInput call never grows unreasonably large.
+    public static void SendUnicode(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        const int Chunk = 64;
+        for (int start = 0; start < text.Length; start += Chunk)
+        {
+            int n = Math.Min(Chunk, text.Length - start);
+            var inputs = new INPUT[n * 2];
+            for (int i = 0; i < n; i++)
+            {
+                char c = text[start + i];
+                inputs[2 * i] = new INPUT
+                {
+                    type = 1,
+                    u = new InputUnion { ki = new KEYBDINPUT { wVk = 0, wScan = c, dwFlags = KEYEVENTF_UNICODE } },
+                };
+                inputs[2 * i + 1] = new INPUT
+                {
+                    type = 1,
+                    u = new InputUnion { ki = new KEYBDINPUT { wVk = 0, wScan = c, dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP } },
+                };
+            }
+            SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        }
+    }
+
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     static extern int SHGetKnownFolderPath([MarshalAs(UnmanagedType.LPStruct)] Guid id, uint flags, IntPtr token, out IntPtr path);
 

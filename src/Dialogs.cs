@@ -257,6 +257,28 @@ sealed class SettingsWindow : ChromeWindow
         excluded.TextChanged += (_, _) =>
             Result.ExcludedApps = excluded.Text.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
 
+        // ---- P2 · paste modes ----------------------------------------------
+        // The two chords are plain text rather than a recorder: one global shortcut recorder in
+        // this dialog is enough, and a typed chord is unambiguous and easy to copy into docs.
+        var mergeNumber = new Toggle(Result.MergeNumbering);
+        mergeNumber.Changed += () => Result.MergeNumbering = mergeNumber.IsOn;
+
+        var quickOn = new Toggle(Result.QuickInsertEnabled);
+        quickOn.Changed += () => Result.QuickInsertEnabled = quickOn.IsOn;
+        var quickChord = ChordField(KeyChord.Describe(Result.QuickInsertModifiers, Result.QuickInsertKey),
+            (m, k) => { Result.QuickInsertModifiers = m; Result.QuickInsertKey = k; });
+        var quickCopy = new Toggle(Result.QuickInsertCopyOnly);
+        quickCopy.Changed += () => Result.QuickInsertCopyOnly = quickCopy.IsOn;
+
+        var seqOn = new Toggle(Result.SequenceHotkeyEnabled);
+        seqOn.Changed += () => Result.SequenceHotkeyEnabled = seqOn.IsOn;
+        var seqChord = ChordField(KeyChord.Describe(Result.SequenceModifiers, Result.SequenceKey),
+            (m, k) => { Result.SequenceModifiers = m; Result.SequenceKey = k; });
+        var seqInterval = Fields.Stepper(Math.Clamp(Result.SequenceIntervalMs, 150, 10000),
+            150, 10000, 100, v => Result.SequenceIntervalMs = v, S.MsUnit);
+        var seqCopy = new Toggle(Result.SequenceCopyOnly);
+        seqCopy.Changed += () => Result.SequenceCopyOnly = seqCopy.IsOn;
+
         // ---- Appearance ----------------------------------------------------
         var preview = new AppearancePreview { HorizontalAlignment = HorizontalAlignment.Stretch };
         void Refresh() => preview.Update(Result);
@@ -309,6 +331,15 @@ sealed class SettingsWindow : ChromeWindow
             Row(S.ClickTitle, S.ClickNote, click),
             Row(S.EdgeTitle, S.EdgeNote, edge),
             Row(S.StartWithWindows, S.StartupNote, startup))));
+        left.Children.Add(Spaced(Card(S.SectionPasteModes,
+            Row(S.MergeNumberTitle, S.MergeNumberNote, mergeNumber),
+            Row(S.QuickInsertTitle, S.QuickInsertNote, quickOn),
+            Row(S.QuickInsertChordTitle, S.HotkeyChordNote, quickChord),
+            Row(S.QuickInsertCopyTitle, S.QuickInsertCopyNote, quickCopy),
+            Row(S.SequenceHotkeyTitle, S.SequenceHotkeyNote, seqOn),
+            Row(S.SequenceChordTitle, S.HotkeyChordNote, seqChord),
+            Row(S.SequenceIntervalTitle, S.SequenceIntervalNote, seqInterval),
+            Row(S.SequenceCopyTitle, S.SequenceCopyNote, seqCopy))));
         left.Children.Add(Spaced(Card(S.SectionAppearance,
             Stacked(S.ThemeTitle, S.ThemeNote, themePicker),
             Stacked(S.AccentTitle, S.AccentNote, accentSwatches),
@@ -382,6 +413,29 @@ sealed class SettingsWindow : ChromeWindow
     {
         if (e is FrameworkElement fe) fe.Margin = new Thickness(0, 16, 0, 0);
         return e;
+    }
+
+    // A typed chord such as "Ctrl+3". Only valid chords are written back to Result, so an
+    // unfinished edit can never leave the settings file with a broken shortcut.
+    static UIElement ChordField(string initial, Action<uint, uint> apply)
+    {
+        var box = new TextBox { Text = initial, Width = 168, ToolTip = S.HotkeyChordNote };
+        var field = Fields.Wrap(box);
+        var hint = Theme.Text("", 10.5, Theme.Faint);
+        hint.Margin = new Thickness(2, 4, 0, 0);
+        box.TextChanged += (_, _) =>
+        {
+            if (KeyChord.TryParse(box.Text, out uint mods, out uint vk))
+            {
+                apply(mods, vk);
+                hint.Text = "";
+            }
+            else hint.Text = S.HotkeyChordInvalid;
+        };
+        var panel = new StackPanel { MinWidth = 168 };
+        panel.Children.Add(field);
+        panel.Children.Add(hint);
+        return panel;
     }
 
     // Avatar, name, GitHub link and version.

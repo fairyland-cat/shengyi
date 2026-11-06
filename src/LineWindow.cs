@@ -235,6 +235,7 @@ sealed class LineWindow : Window
         store.Bumped += OnBumped;
         store.Updated += OnUpdated;
         store.UsageReset += OnUsageReset;
+        actions.MultiChanged += OnMultiChanged;
         Theme.Changed += OnThemeChanged;
         UpdateChrome();
     }
@@ -302,6 +303,7 @@ sealed class LineWindow : Window
         if (!IsOut) return;
         IsOut = false;
         KeyboardMode = false;
+        actions.ClearMulti(); // a hidden line must not keep an invisible Ctrl+Click selection
         SetActivatable(false);
         SlideTo(-Height, EasingMode.EaseIn, 200, () => { if (!IsOut) Hide(); });
     }
@@ -344,6 +346,9 @@ sealed class LineWindow : Window
 
     // A deliberate reset should be visible at once, unlike a single take.
     void OnUsageReset() => Relayout(false);
+
+    // Ctrl+Click selection lives in Actions so every monitor sees the same set.
+    void OnMultiChanged() => UpdateDecor();
 
     // A palette/size change invalidates every realized card: rebuild them from the new theme.
     void OnThemeChanged()
@@ -399,6 +404,8 @@ sealed class LineWindow : Window
                 .OrderByDescending(g => g.Count()).Select(g => g.Key));
             filterPanel.SetTags(store.Items.Where(i => i.Tags != null)
                 .SelectMany(i => i.Tags!).Distinct(StringComparer.OrdinalIgnoreCase));
+            filterPanel.SetCategories(store.Items.Where(i => i.FileCategory != null)
+                .Select(i => i.FileCategory!).Distinct(StringComparer.OrdinalIgnoreCase));
         }
         UpdateWindowHeight();
         if (relayout) { selected = 0; target = 0; Relayout(false); }
@@ -406,6 +413,11 @@ sealed class LineWindow : Window
 
     // Used by the off-screen screenshots, and handy for any future automation.
     public void SetQuery(string text) => search.Text = text;
+
+    // Quick insert asks the active line for its first text hit before falling back to "latest text".
+    public string Query => search.Text;
+    public ClipItem? TopTextResult =>
+        order.FirstOrDefault(i => (i.IsText || i.IsSticky) && !string.IsNullOrWhiteSpace(i.Text));
 
     void SetFilter(Filter f)
     {
@@ -437,7 +449,8 @@ sealed class LineWindow : Window
         }
 
         var q = SearchQuery.Parse(search.Text, filterPanel.SelectedApps,
-                                  filterPanel.SelectedKinds, filterPanel.WithinDays, filterPanel.SelectedTags);
+                                  filterPanel.SelectedKinds, filterPanel.WithinDays, filterPanel.SelectedTags,
+                                  filterPanel.SelectedCategories);
         q.AddTab(filter);
         highlight = q.Highlight;
 
@@ -576,6 +589,7 @@ sealed class LineWindow : Window
             if (!views.TryGetValue(order[i], out var v)) continue;
             v.Number = KeyboardMode && i < 9 ? i + 1 : 0;
             v.Selected = KeyboardMode && i == selected;
+            v.Checked = actions.IsMulti(order[i]);
             v.Highlight = highlight;
         }
         double W = viewport.Width;
@@ -648,6 +662,9 @@ sealed class LineWindow : Window
             case Key.P when ctrl && item != null: actions.TogglePin(item); break;
             case Key.E when ctrl && item != null: actions.Edit(item); break;
             case Key.N when ctrl: actions.NewSticky(); break;
+            // Ctrl+M merges the Ctrl+Click selection into the clipboard; add Shift to paste it too.
+            // (Ctrl+C is deliberately left alone so it still copies text inside the search box.)
+            case Key.M when ctrl && actions.MultiItems.Count >= 2: actions.Merge(shift); break;
             case >= Key.D1 and <= Key.D9 when ctrl:
             {
                 int n = key - Key.D1;
@@ -695,6 +712,7 @@ sealed class LineWindow : Window
         store.Bumped -= OnBumped;
         store.Updated -= OnUpdated;
         store.UsageReset -= OnUsageReset;
+        actions.MultiChanged -= OnMultiChanged;
         foreach (var v in views.Values) v.Detach();
         base.OnClosed(e);
     }

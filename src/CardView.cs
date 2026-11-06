@@ -27,7 +27,7 @@ sealed class CardView : Grid
     public double Angle, Velocity; // degrees, degrees per second
 
     readonly Actions actions;
-    readonly Border frame, close, badge, number, ring;
+    readonly Border frame, close, badge, number, ring, check;
     readonly TextBlock badgeText = new() { Foreground = Brushes.White, FontSize = 12, FontWeight = FontWeights.SemiBold };
     readonly TextBlock numberText = new() { FontSize = 10.5, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     readonly ScaleTransform scale = new();
@@ -38,7 +38,7 @@ sealed class CardView : Grid
     TextBlock? bodyText;
     string bodyFull = "", highlight = "";
     Point downAt;
-    bool pressed, hover, selected;
+    bool pressed, hover, selected, checkedOn;
     int shownNumber = -1;
 
     static SolidColorBrush MakeHighlightBrush()
@@ -227,6 +227,30 @@ sealed class CardView : Grid
         };
         close.MouseLeftButtonDown += (_, e) => { e.Handled = true; actions.Remove(Item); };
 
+        // Ctrl+Click selection for merge / sequence paste, drawn on the card's top-left corner.
+        check = new Border
+        {
+            Width = 18,
+            Height = 18,
+            CornerRadius = new CornerRadius(9),
+            Background = Theme.B(p.Accent),
+            BorderBrush = Brushes.White,
+            BorderThickness = new Thickness(1.5),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+            // Mirror the ✕ on the opposite corner: straddling the card edge keeps the badge
+            // clear of the first line of text instead of covering the first character.
+            Margin = new Thickness(-7, PegDrop - 6, 0, 0),
+            Visibility = Visibility.Collapsed,
+            IsHitTestVisible = false,
+            Child = new TextBlock
+            {
+                Text = "✓", FontSize = 10, FontWeight = FontWeights.Bold, Foreground = Brushes.White,
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, -1, 0, 0),
+            },
+        };
+
         Children.Add(ring);
         Children.Add(frame);
         Children.Add(peg);
@@ -255,6 +279,29 @@ sealed class CardView : Grid
                 },
             });
         }
+        // File cards carry a coarse category (media / archive / document / picture / folder).
+        // It sits on the opposite side from the smart-tag badge, so both can show at once.
+        if (item.Kind == ClipKind.Files && item.FileCategory is { } category)
+        {
+            Children.Add(new Border
+            {
+                CornerRadius = new CornerRadius(7),
+                Padding = new Thickness(6, 1, 6, 1),
+                Background = Theme.B(p.Panel),
+                BorderBrush = Theme.B(Theme.WithAlpha(p.PanelInk, 0x40)),
+                BorderThickness = new Thickness(1),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(2, 0, 0, -20),
+                IsHitTestVisible = false,
+                Child = new TextBlock
+                {
+                    Text = FileCategories.Name(category), FontSize = 9.5,
+                    Foreground = Theme.B(p.PanelInk), FontWeight = FontWeights.SemiBold,
+                },
+            });
+        }
+        Children.Add(check);
         Children.Add(close);
         Restyle();
         ApplyHighlight();
@@ -296,6 +343,18 @@ sealed class CardView : Grid
             if (value == selected) return;
             selected = value;
             Fade(ring, value ? 1 : 0, 160);
+            Restyle();
+        }
+    }
+
+    // Part of the Ctrl+Click merge selection (as opposed to the keyboard cursor above).
+    public bool Checked
+    {
+        set
+        {
+            if (value == checkedOn) return;
+            checkedOn = value;
+            check.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
             Restyle();
         }
     }
@@ -369,11 +428,11 @@ sealed class CardView : Grid
     // Selected cards and the one under the pointer lift a little: bigger, deeper shadow, on top.
     void Restyle()
     {
-        double s = selected ? 1.07 : hover ? 1.035 : 1;
+        double s = selected ? 1.07 : (hover || checkedOn) ? 1.035 : 1;
         var a = new DoubleAnimation(s, TimeSpan.FromMilliseconds(180)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
         scale.BeginAnimation(ScaleTransform.ScaleXProperty, a);
         scale.BeginAnimation(ScaleTransform.ScaleYProperty, a);
-        bool lifted = selected || hover;
+        bool lifted = selected || hover || checkedOn;
         shadow.BlurRadius = lifted ? 24 : 16;
         shadow.ShadowDepth = lifted ? 7 : 4;
         shadow.Opacity = lifted ? 0.34 : 0.26;
@@ -671,6 +730,14 @@ sealed class CardView : Grid
         {
             Cancel();
             actions.Open(Item);
+            return;
+        }
+        // Ctrl+Click picks the card for merge / sequence paste. It never starts a drag, a hold
+        // or a take, and it is deliberately ignored outside the real app (Preview passes null).
+        if (actions != null && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            actions.ToggleMulti(Item);
+            Cancel();
             return;
         }
         pressed = true;

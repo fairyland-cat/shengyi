@@ -39,12 +39,18 @@ sealed class AppController : IDisposable
         messages = new MessageWindow();
         messages.Hotkey += reveal.Toggle;
         messages.NoteHotkey += () => actions.NewSticky();
+        messages.NextHotkey += () => actions.SequenceNext();
+        messages.InsertHotkey += () => actions.QuickInsert();
         hook = new KeyboardHook { Enabled = settings.ReplaceWinV };
         hook.WinV += reveal.Toggle;
+        hook.Escape += () => actions.StopSequence();
         clipboard = new ClipboardWatcher(() => settings, store.Add);
         messages.ClipboardChanged += clipboard.Notify;
+        actions.SequenceChanged += SyncHook;
 
         BuildTray();
+        actions.Notify = msg => tray.ShowBalloonTip(3000, S.AppName, msg, Forms.ToolTipIcon.Info);
+        ApplyAuxHotkeys();
         if (!messages.SetHotkey(settings.HotkeyModifiers, settings.HotkeyKey))
             tray.ShowBalloonTip(5000, S.AppName, string.Format(S.HotkeyFailed, CurrentHotkey), Forms.ToolTipIcon.Warning);
         if (!settings.ClipboardWelcomeShown)
@@ -57,6 +63,25 @@ sealed class AppController : IDisposable
     }
 
     string CurrentHotkey => HotkeyText.Describe(settings.HotkeyModifiers, settings.HotkeyKey);
+
+    // Both P2 global chords are optional. Registering them is idempotent: unregister first, so
+    // toggling a setting off really releases the key instead of leaving a stale binding.
+    void ApplyAuxHotkeys()
+    {
+        bool ok = messages.SetAuxHotkeys(
+            settings.SequenceHotkeyEnabled, settings.SequenceModifiers, settings.SequenceKey,
+            settings.QuickInsertEnabled, settings.QuickInsertModifiers, settings.QuickInsertKey);
+        if (!ok) tray.ShowBalloonTip(5000, S.AppName, S.AuxHotkeyFailed, Forms.ToolTipIcon.Warning);
+    }
+
+    // Esc only cancels a running paste sequence, and the low-level hook is installed on demand
+    // for that purpose — a user who never enables Win+V should still be able to press Esc.
+    void SyncHook()
+    {
+        bool running = actions.SequenceActive;
+        hook.EscapeEnabled = running;
+        hook.Enabled = settings.ReplaceWinV || running;
+    }
 
     void OnDisplaysChanged(object? sender, EventArgs e) => app.Dispatcher.BeginInvoke(BuildWindows);
 
@@ -147,7 +172,8 @@ sealed class AppController : IDisposable
         settings.Save();
         store.RefreshTags();   // re-recognise history when 智能标签 was toggled
         Theme.Apply(settings); // repaints every line window and rebuilds its cards
-        hook.Enabled = settings.ReplaceWinV;
+        ApplyAuxHotkeys();     // pick up the two optional paste-mode chords
+        SyncHook();            // Win+V / Esc hook follows the saved settings and any live sequence
         try { Autostart.Enabled = w.StartWithWindows; }
         catch (Exception e) when (e is UnauthorizedAccessException or System.Security.SecurityException) { }
         store.Sweep();

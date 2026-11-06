@@ -33,6 +33,13 @@ sealed partial class ClipItem
     public int Width { get; set; }
     public int Height { get; set; }
     public List<string>? Files { get; set; }
+    // Original clipboard image format (png / jpg / gif / webp / bmp). Since 0.6.0 the exact bytes
+    // are kept on disk instead of always re-encoding to PNG. Null = history from an older version,
+    // which is PNG by definition.
+    public string? ImageFormat { get; set; }
+    // Transient: the exact clipboard bytes, handed from the watcher to Add() and then dropped.
+    // Never serialized — clips.json keeps only the file name and the format id.
+    [JsonIgnore] public byte[]? OriginalBytes { get; set; }
     public bool Pinned { get; set; }
     public DateTime Time { get; set; }
     public string Hash { get; set; } = "";
@@ -247,16 +254,26 @@ sealed class ClipStore : IDisposable
             ScheduleSave();
             return;
         }
+        // Derived from the paths, so every caller (watcher, screenshots, drag-in) gets a
+        // category without having to remember to set it. clips.json remains the only truth.
+        if (item.Kind == ClipKind.Files) item.FileCategory = FileCategories.Of(item.Files);
         Retag(item);
         if (bitmap != null)
         {
-            item.Image = item.Id + ".png";
+            var raw = item.OriginalBytes;
+            item.OriginalBytes = null; // do not keep a second copy of a large image in memory
+            item.Image = item.Id + ImageFormats.Extension(item.ImageFormat);
             try
             {
-                using var fs = File.Create(item.ImagePath!);
-                var encoder = new PngBitmapEncoder();
-                encoder.Frames.Add(BitmapFrame.Create(bitmap));
-                encoder.Save(fs);
+                if (raw is { Length: > 0 })
+                    File.WriteAllBytes(item.ImagePath!, raw);
+                else
+                {
+                    using var fs = File.Create(item.ImagePath!);
+                    var encoder = new PngBitmapEncoder();
+                    encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                    encoder.Save(fs);
+                }
             }
             catch (IOException) { return; }
             item.Width = bitmap.PixelWidth;
@@ -412,13 +429,22 @@ sealed class ClipStore : IDisposable
         try
         {
             var list = JsonSerializer.Deserialize<List<ClipItem>>(File.ReadAllText(IndexPath));
+            bool enriched = false;
             foreach (var item in list ?? new())
             {
                 if (item.Kind == ClipKind.Image && !File.Exists(item.ImagePath)) continue;
                 // History saved before v0.5.0 gets recognised too, without changing its order.
                 Retag(item);
+                // File cards saved before 0.6.0 have no category; derive it on load so the
+                // chips and cat: filters work immediately after an upgrade.
+                if (item.Kind == ClipKind.Files && item.FileCategory == null)
+                {
+                    item.FileCategory = FileCategories.Of(item.Files);
+                    enriched = true;
+                }
                 Items.Add(item);
             }
+            if (enriched) ScheduleSave();
         }
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { }
     }

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
-using System.Windows.Input;
 using Microsoft.Win32;
 
 namespace Shengyi;
@@ -28,6 +27,19 @@ sealed class Settings
     public bool RecordSourceApp { get; set; } = true;  // also stores the clipboard format list
     public bool FuzzySearch { get; set; } = true;      // subsequence fallback when nothing matches
     public bool SmartTagging { get; set; } = true;     // local regex entity tags; nothing leaves the machine
+
+    // P2 · paste modes. Both global shortcuts are OFF by default: an unrequested Ctrl+3 or
+    // Ctrl+Alt+Shift+V would otherwise hijack another application's shortcut.
+    public bool MergeNumbering { get; set; }                    // "1. ", "2. " in merged text
+    public bool QuickInsertEnabled { get; set; }
+    public uint QuickInsertModifiers { get; set; } = 0x2;     // Ctrl
+    public uint QuickInsertKey { get; set; } = 0x33;          // 3  → Ctrl+3
+    public bool QuickInsertCopyOnly { get; set; }             // fallback: copy instead of typing
+    public bool SequenceHotkeyEnabled { get; set; }
+    public uint SequenceModifiers { get; set; } = 0x7;        // Ctrl+Alt+Shift
+    public uint SequenceKey { get; set; } = 0x56;             // V  → Ctrl+Alt+Shift+V
+    public int SequenceIntervalMs { get; set; } = 700;        // auto-sequence delay
+    public bool SequenceCopyOnly { get; set; }                // fallback for terminals / RDP
 
     // Appearance. Defaults reproduce the original 绳忆 look exactly.
     public string ThemeName { get; set; } = "soft";        // soft | silver | linen | porcelain | graphite
@@ -72,11 +84,9 @@ static class HotkeyText
         return s;
     }
 
-    public static string Describe(uint mods, uint vk)
-    {
-        var key = KeyInterop.KeyFromVirtualKey((int)vk);
-        return Modifiers(mods) + (key >= Key.D0 && key <= Key.D9 ? ((int)(key - Key.D0)).ToString() : key.ToString());
-    }
+    // Delegated to the dependency-free parser so the settings dialog, the tray balloon and the
+    // README always spell a chord the same way.
+    public static string Describe(uint mods, uint vk) => KeyChord.Describe(mods, vk);
 }
 
 static class Autostart

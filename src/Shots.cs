@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -50,6 +51,16 @@ static class Shots
         tagLine.SetQuery("tag:phone");
         tagLine.SetFiltersOpen(true);
 
+        // A fourth line shows P2: two Ctrl+Click-checked cards and the file-category chips.
+        // It gets its own Actions so the selection marks do not leak into the other screenshots.
+        var mergeActions = new Actions(store, reveal, () => settings);
+        var mergeLine = new LineWindow(Forms.Screen.PrimaryScreen!, store, mergeActions, () => settings);
+        windows.Add(mergeLine);
+        mergeLine.Reveal(keyboard: true);
+        mergeLine.SetFiltersOpen(true);
+        foreach (var picked in store.Items.Where(i => i.IsText).Take(2).ToList())
+            mergeActions.ToggleMulti(picked);
+
         var prefs = new SettingsWindow(settings, true, () => { }, () => { })
         {
             WindowStartupLocation = WindowStartupLocation.Manual, Left = -20000, Top = -20000, ShowActivated = false,
@@ -61,10 +72,12 @@ static class Shots
             Save(Scene(Snapshot((FrameworkElement)line.Content), line.Height), System.IO.Path.Combine(folder, "line.png"));
             Save(Scene(Snapshot((FrameworkElement)searchLine.Content), searchLine.Height, desktop: false), System.IO.Path.Combine(folder, "search.png"));
             Save(Scene(Snapshot((FrameworkElement)tagLine.Content), tagLine.Height, desktop: false), System.IO.Path.Combine(folder, "tags.png"));
+            Save(Scene(Snapshot((FrameworkElement)mergeLine.Content), mergeLine.Height, desktop: false), System.IO.Path.Combine(folder, "merge.png"));
             Save((FrameworkElement)prefs.Content, System.IO.Path.Combine(folder, "settings.png"));
             line.Close();
             searchLine.Close();
             tagLine.Close();
+            mergeLine.Close();
             prefs.Close();
             store.Dispose();
             Preview.Render(System.IO.Path.Combine(folder, "cards.png"), done);
@@ -100,6 +113,13 @@ static class Shots
         Text("const clips = history.filter(c => c.pinned)\n    .map(c => c.text);\nconsole.log(clips.length);", uses: 3, hoursAgo: 5, app: "code");
         var files = new List<string> { @"C:\Windows\notepad.exe" };
         store.Add(new ClipItem { Kind = ClipKind.Files, Files = files, Hash = Classify.HashFiles(files), SourceApp = "explorer" });
+        // File categories are derived in ClipStore.Add, so the drawer has real chips to show.
+        void Files(List<string> paths) => store.Add(new ClipItem
+        {
+            Kind = ClipKind.Files, Files = paths, Hash = Classify.HashFiles(paths), SourceApp = "explorer",
+        });
+        Files(new List<string> { @"D:\media\发布会剪辑.mp4", @"D:\media\配乐.wav" });
+        Files(new List<string> { @"D:\download\设计源文件.zip", @"D:\download\素材.7z" });
         Text("rgb(52, 211, 153)", app: "figma");
         var photo = Picture(DrawLandscape);
         store.Add(new ClipItem { Kind = ClipKind.Image, Hash = ImageHash.Of(photo), SourceApp = "snippingtool" }, photo);

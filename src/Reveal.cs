@@ -29,6 +29,9 @@ sealed class RevealController
     // The window that had focus when keyboard mode opened; pasting goes back there.
     public IntPtr PasteTarget { get; private set; }
 
+    // Quick insert prefers the first text result of an open, filtered line over "latest text".
+    public LineWindow? ActiveKeyboardWindow => windows().FirstOrDefault(w => w.IsOut && w.KeyboardMode);
+
     public RevealController(Func<IReadOnlyList<LineWindow>> windows, Func<bool> edgeEnabled)
     {
         this.windows = windows;

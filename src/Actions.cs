@@ -1,32 +1,50 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
-using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using Forms = System.Windows.Forms;
 
 namespace Shengyi;
 
-// Everything you can do with a clip.
+// Everything you can do with a clip. P2 adds four ways of taking several clips at once:
+// merge (one clipboard entry), a paste sequence (one clip per hotkey / timer tick), quick
+// insert (Unicode injection, clipboard untouched) and lossless image round-tripping.
 sealed class Actions
 {
     readonly ClipStore store;
     readonly RevealController reveal;
     readonly Func<Settings> settings;
 
+    // Ctrl+Click selection, shared by every LineWindow because all monitors use one Actions.
+    // A list, not a set: the merge output follows the order the cards were picked in.
+    readonly List<ClipItem> multi = new();
+    readonly Queue<ClipItem> sequence = new();
+    readonly DispatcherTimer seqTimer = new();
+    IntPtr seqTarget;
+    bool seqAuto, seqCopyOnly;
+
+    public event Action? MultiChanged;
+    public event Action? SequenceChanged;
+    public Action<string>? Notify { get; set; }   // tray balloon, wired by AppController
+
+    public bool SequenceActive => sequence.Count > 0 || seqTimer.IsEnabled;
+    public IReadOnlyList<ClipItem> MultiItems => multi;
+
     public Actions(ClipStore store, RevealController reveal, Func<Settings> settings)
     {
         this.store = store;
         this.reveal = reveal;
         this.settings = settings;
+        seqTimer.Tick += (_, _) => SequenceNext();
     }
 
     // Click / Enter. Copies by default; Shift does the other thing. Settings can swap the two.
@@ -47,9 +65,24 @@ sealed class Actions
                 byte[] bytes;
                 try { bytes = File.ReadAllBytes(item.ImagePath!); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
-                var bmp = new System.Drawing.Bitmap(new MemoryStream(bytes));
-                data.SetImage(bmp);
-                data.SetData("PNG", false, new MemoryStream(bytes));
+                bool placed = false;
+                // CF_BITMAP is the widely understood flavour; some formats (WebP) have no GDI+
+                // decoder, in which case the original format below is the only representation.
+                try
+                {
+                    using var ms = new MemoryStream(bytes);
+                    using var bmp = new System.Drawing.Bitmap(ms);
+                    data.SetImage(bmp);
+                    placed = true;
+                }
+                catch (Exception e) when (e is ArgumentException or ExternalException or IOException) { }
+                string? write = ImageFormats.WriteFormat(item.ImageFormat);
+                if (write != null)
+                {
+                    data.SetData(write, false, new MemoryStream(bytes));
+                    placed = true;
+                }
+                if (!placed) return false;
                 break;
             case ClipKind.Files:
                 var files = new StringCollection();
@@ -75,12 +108,20 @@ sealed class Actions
         catch (ExternalException) { return false; }
     }
 
+    IntPtr TargetWindow() => reveal.PasteTarget != IntPtr.Zero ? reveal.PasteTarget : Native.GetForegroundWindow();
+
     // Puts the clip on the clipboard, returns focus to the app you were in and presses Ctrl+V there.
     public async void Paste(ClipItem item, bool plain)
     {
-        var target = reveal.PasteTarget != IntPtr.Zero ? reveal.PasteTarget : Native.GetForegroundWindow();
+        var target = TargetWindow();
         if (!Copy(item, plain)) return;
         reveal.RetractAll();
+        await PasteInto(target);
+    }
+
+    // Shared by a single paste, merge paste and each step of a sequence.
+    public async Task PasteInto(IntPtr target)
+    {
         if (target == IntPtr.Zero || Native.IsOwn(target)) return;
         Native.ForceForeground(target);
         await Task.Delay(90);
@@ -89,6 +130,137 @@ sealed class Actions
             if (Native.KeyDown(vk)) Native.SendKeys((vk, true));
         Native.SendKeys((0x11, false), (0x56, false), (0x56, true), (0x11, true));
     }
+
+    // ---- multi selection -----------------------------------------------------
+
+    public bool IsMulti(ClipItem item) => multi.Contains(item);
+
+    public void ToggleMulti(ClipItem item)
+    {
+        if (!multi.Remove(item)) multi.Add(item);
+        MultiChanged?.Invoke();
+    }
+
+    public void ClearMulti()
+    {
+        if (multi.Count == 0) return;
+        multi.Clear();
+        MultiChanged?.Invoke();
+    }
+
+    // ---- merge paste ---------------------------------------------------------
+
+    public void Merge(bool paste)
+    {
+        if (multi.Count < 2) { Notify?.Invoke(S.MergeNeedTwo); return; }
+        var items = multi.ToList();
+        var result = MergeText.Build(items, settings().MergeNumbering);
+        if (result.Used == 0) { Notify?.Invoke(S.MergeNoText); return; }
+
+        var data = new Forms.DataObject();
+        data.SetData(ClipboardWatcher.SelfFormat, new MemoryStream(new byte[] { 1 }));
+        data.SetText(result.Text, Forms.TextDataFormat.UnicodeText);
+        try { Forms.Clipboard.SetDataObject(data, true, 10, 50); }
+        catch (ExternalException) { return; }
+
+        foreach (var item in items) store.RecordUse(item);
+        var target = TargetWindow();
+        ClearMulti();
+        reveal.RetractAll();
+        if (paste) _ = PasteInto(target);
+        else Notify?.Invoke(string.Format(S.MergeCopied, result.Used, result.Skipped));
+    }
+
+    // ---- paste sequence ------------------------------------------------------
+
+    // Manual mode pastes the first clip immediately and waits for the "next" hotkey; auto mode
+    // walks the queue on a timer. Esc cancels either. Set "copy only" in Settings as a fallback
+    // for terminals / remote desktops where simulated Ctrl+V is unreliable.
+    public void StartSequence(IReadOnlyList<ClipItem> items, bool auto)
+    {
+        if (items.Count == 0) return;
+        // Manual mode advances with a global hotkey. Refusing to start is clearer than a queue
+        // that silently cannot be advanced because the user never enabled the shortcut.
+        if (!auto && !settings().SequenceHotkeyEnabled) { Notify?.Invoke(S.SequenceNeedHotkey); return; }
+        seqTimer.Stop();
+        sequence.Clear();
+        foreach (var item in items) sequence.Enqueue(item);
+        seqAuto = auto;
+        seqCopyOnly = settings().SequenceCopyOnly;
+        seqTarget = TargetWindow();
+        ClearMulti();
+        reveal.RetractAll();
+
+        if (auto)
+        {
+            seqTimer.Interval = TimeSpan.FromMilliseconds(Math.Clamp(settings().SequenceIntervalMs, 150, 10000));
+            seqTimer.Start();
+        }
+        SequenceChanged?.Invoke();
+        Notify?.Invoke(string.Format(S.SequenceStarted, sequence.Count,
+            auto ? S.SequenceAuto : S.SequenceManual,
+            KeyChord.Describe(settings().SequenceModifiers, settings().SequenceKey)));
+        if (!auto) SequenceNext(); // first clip goes out immediately; the hotkey advances the rest
+    }
+
+    public void SequenceNext()
+    {
+        if (sequence.Count == 0) { StopSequence(); return; }
+        var item = sequence.Dequeue();
+        bool copied = Copy(item, false);
+        if (copied && !seqCopyOnly) _ = PasteInto(seqTarget);
+        if (sequence.Count == 0) StopSequence();
+        else if (!seqAuto) SequenceChanged?.Invoke();
+    }
+
+    public void StopSequence(bool notify = true)
+    {
+        bool wasActive = SequenceActive;
+        seqTimer.Stop();
+        sequence.Clear();
+        SequenceChanged?.Invoke();
+        if (notify && wasActive) Notify?.Invoke(S.SequenceStopped);
+    }
+
+    // ---- quick insert --------------------------------------------------------
+
+    // Injects Unicode characters straight into the focused control. The clipboard is never read
+    // or written, so whatever the user copied before stays there.
+    public void QuickInsert(ClipItem? chosen = null)
+    {
+        var fg = Native.GetForegroundWindow();
+        if (Native.IsOwn(fg))
+        {
+            if (reveal.PasteTarget == IntPtr.Zero || !Native.IsWindow(reveal.PasteTarget))
+            {
+                Notify?.Invoke(S.QuickInsertNoTarget);
+                return;
+            }
+            reveal.RetractAll(); // hands focus back to the window we were typing in
+        }
+        var item = chosen ?? PickInsertItem();
+        if (item == null || string.IsNullOrEmpty(item.Text)) { Notify?.Invoke(S.QuickInsertNothing); return; }
+        if (settings().QuickInsertCopyOnly)
+        {
+            if (Copy(item, true)) Notify?.Invoke(S.QuickInsertCopied);
+            return;
+        }
+        store.RecordUse(item);
+        Native.SendUnicode(item.Text!);
+    }
+
+    ClipItem? PickInsertItem()
+    {
+        var win = reveal.ActiveKeyboardWindow;
+        if (win is { KeyboardMode: true } && win.Query.Trim().Length > 0)
+        {
+            var top = win.TopTextResult;
+            if (top != null) return top;
+        }
+        return store.Items.FirstOrDefault(i => (i.IsText || i.IsSticky) && !string.IsNullOrWhiteSpace(i.Text));
+    }
+
+    // ---- the rest of the item actions ----------------------------------------
 
     // Double click.
     public void Open(ClipItem item)
@@ -151,6 +323,7 @@ sealed class Actions
         if (item.IsSticky && store.Items.Contains(item)
             && MessageBox.Show(S.DeleteStickyConfirm, S.AppName, MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK)
             return;
+        multi.Remove(item);
         store.Remove(item);
     }
 
@@ -168,11 +341,13 @@ sealed class Actions
     {
         reveal.RetractAll();
         bool image = item.Kind == ClipKind.Image;
+        string ext = image ? Path.GetExtension(item.ImagePath ?? "") : "";
+        if (ext.Length < 2) ext = ".png";
         var dlg = new Microsoft.Win32.SaveFileDialog
         {
             FileName = $"Clip {item.Time:yyyy-MM-dd HH.mm.ss}",
-            DefaultExt = image ? ".png" : ".txt",
-            Filter = image ? "PNG|*.png" : "Text|*.txt",
+            DefaultExt = image ? ext : ".txt",
+            Filter = image ? "Image|*" + ext : "Text|*.txt",
             InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
         };
         if (dlg.ShowDialog() != true) return;
@@ -242,6 +417,17 @@ sealed class Actions
         Add(S.Copy, () => { if (Copy(item, false)) view.Flash(S.Copied); });
         Add(S.Paste, () => Paste(item, false));
         if (item.IsRich) Add(S.PastePlain, () => Paste(item, true));
+        Add(S.QuickInsertThis, () => QuickInsert(item));
+
+        if (multi.Count >= 2)
+        {
+            menu.Items.Add(new Separator());
+            Add(string.Format(S.MergeCopyMany, multi.Count), () => Merge(false));
+            Add(string.Format(S.MergePasteMany, multi.Count), () => Merge(true));
+            Add(string.Format(S.SequenceManualMany, multi.Count), () => StartSequence(MultiItems.ToList(), false));
+            Add(string.Format(S.SequenceAutoMany, multi.Count), () => StartSequence(MultiItems.ToList(), true));
+            Add(S.MultiClear, () => ClearMulti());
+        }
         menu.Items.Add(new Separator());
         if (item.IsSticky)
         {

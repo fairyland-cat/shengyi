@@ -15,11 +15,13 @@ namespace Shengyi;
 // Hidden message-only window: receives the global hotkey and clipboard notifications.
 sealed class MessageWindow : IDisposable
 {
-    const int HotkeyId = 1, NoteHotkeyId = 2;
+    const int HotkeyId = 1, NoteHotkeyId = 2, NextHotkeyId = 3, InsertHotkeyId = 4;
     readonly HwndSource source;
 
     public event Action? Hotkey;
     public event Action? NoteHotkey;
+    public event Action? NextHotkey;      // paste the next clip in a sequence
+    public event Action? InsertHotkey;    // quick insert without touching the clipboard
     public event Action? ClipboardChanged;
 
     public MessageWindow()
@@ -33,6 +35,8 @@ sealed class MessageWindow : IDisposable
     {
         if (msg == Native.WM_HOTKEY && wParam == NoteHotkeyId) { NoteHotkey?.Invoke(); handled = true; }
         else if (msg == Native.WM_HOTKEY && wParam == HotkeyId) { Hotkey?.Invoke(); handled = true; }
+        else if (msg == Native.WM_HOTKEY && wParam == NextHotkeyId) { NextHotkey?.Invoke(); handled = true; }
+        else if (msg == Native.WM_HOTKEY && wParam == InsertHotkeyId) { InsertHotkey?.Invoke(); handled = true; }
         else if (msg == Native.WM_CLIPBOARDUPDATE) ClipboardChanged?.Invoke();
         return IntPtr.Zero;
     }
@@ -49,10 +53,28 @@ sealed class MessageWindow : IDisposable
     // moment, including while the line is hidden and has no keyboard focus.
     public bool SetNoteHotkey() => Native.RegisterHotKey(source.Handle, NoteHotkeyId, 0x1 | 0x2 | 0x4000, 0x4E); // Ctrl+Alt+N
 
+    // The two P2 shortcuts are optional and configured in Settings. MOD_NOREPEAT (0x4000) keeps
+    // a held key from firing a whole sequence at once. Returns false if a chord was taken already.
+    public bool SetAuxHotkeys(bool nextOn, uint nextMods, uint nextVk, bool insertOn, uint insertMods, uint insertVk)
+    {
+        ClearAuxHotkeys();
+        bool ok = true;
+        if (nextOn) ok &= Native.RegisterHotKey(source.Handle, NextHotkeyId, nextMods | 0x4000, nextVk);
+        if (insertOn) ok &= Native.RegisterHotKey(source.Handle, InsertHotkeyId, insertMods | 0x4000, insertVk);
+        return ok;
+    }
+
+    public void ClearAuxHotkeys()
+    {
+        Native.UnregisterHotKey(source.Handle, NextHotkeyId);
+        Native.UnregisterHotKey(source.Handle, InsertHotkeyId);
+    }
+
     public void Dispose()
     {
         ClearHotkey();
         Native.UnregisterHotKey(source.Handle, NoteHotkeyId);
+        ClearAuxHotkeys();
         Native.RemoveClipboardFormatListener(source.Handle);
         source.Dispose();
     }
@@ -62,13 +84,18 @@ sealed class MessageWindow : IDisposable
 // Only installed while the setting is on.
 sealed class KeyboardHook : IDisposable
 {
-    const int VK_V = 0x56;
+    const int VK_V = 0x56, VK_ESCAPE = 0x1B;
     readonly Native.HookProc proc;
     readonly Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
     IntPtr hook;
     bool swallowing;
 
     public event Action? WinV;
+    public event Action? Escape;
+
+    // Only while a paste sequence is running. Esc is swallowed so it cancels the sequence instead
+    // of reaching the target app; the hook is enabled on demand by AppController.
+    public bool EscapeEnabled { get; set; }
 
     public KeyboardHook() => proc = Callback;
 
@@ -93,6 +120,12 @@ sealed class KeyboardHook : IDisposable
         {
             var k = Marshal.PtrToStructure<Native.KBDLLHOOKSTRUCT>(lParam);
             bool injected = (k.flags & 0x10) != 0;
+            if (EscapeEnabled && k.vkCode == VK_ESCAPE && !injected)
+            {
+                if ((int)wParam is Native.WM_KEYDOWN or Native.WM_SYSKEYDOWN)
+                    dispatcher.BeginInvoke(() => Escape?.Invoke());
+                return new IntPtr(1); // swallow both press and release
+            }
             if (k.vkCode == VK_V && !injected)
             {
                 bool down = (int)wParam is Native.WM_KEYDOWN or Native.WM_SYSKEYDOWN;
@@ -136,7 +169,7 @@ sealed class ClipboardWatcher
     static readonly uint ExcludeFormat = Native.RegisterClipboardFormat("ExcludeClipboardContentFromMonitorProcessing");
     static readonly uint ViewerIgnoreFormat = Native.RegisterClipboardFormat("Clipboard Viewer Ignore");
     static readonly uint HistoryFormat = Native.RegisterClipboardFormat("CanIncludeInClipboardHistory");
-    const int MaxText = 1_000_000, MaxRich = 4_000_000;
+    const int MaxText = 1_000_000, MaxRich = 4_000_000, MaxImageBytes = 32_000_000;
 
     readonly Func<Settings> settings;
     readonly Action<ClipItem, BitmapSource?> onClip;
@@ -215,14 +248,22 @@ sealed class ClipboardWatcher
             }), null);
             return;
         }
-        if (Clipboard.ContainsImage() && ReadImage() is { } bmp)
-            onClip(Enrich(new ClipItem { Kind = ClipKind.Image, Hash = ImageHash.Of(bmp) }), bmp);
+        if ((Clipboard.ContainsImage() || HasRawImage()) && ReadImage() is { } image)
+            onClip(Enrich(new ClipItem
+            {
+                Kind = ClipKind.Image,
+                Hash = ImageHash.Of(image.Bitmap),
+                ImageFormat = image.FormatId,
+                OriginalBytes = image.Bytes,
+            }), image.Bitmap);
     }
 
     // Attach the provenance that makes "只搜浏览器里复制的内容" possible. The owner was already
     // sampled in Notify(); the format list is best-effort and never blocks a capture.
     ClipItem Enrich(ClipItem item)
     {
+        // Provenance is optional for privacy. The file category is deliberately NOT set here:
+        // ClipStore.Add derives it for every caller, including screenshots and old history.
         if (!settings().RecordSourceApp) return item;
         item.SourceApp = owner;
         item.Formats = ReadFormats();
@@ -248,22 +289,76 @@ sealed class ClipboardWatcher
         return string.IsNullOrEmpty(s) || s.Length > MaxRich ? null : s;
     }
 
-    static BitmapSource? ReadImage()
+    // Some apps publish PNG/JFIF/GIF without a CF_BITMAP, so ContainsImage() alone is not enough.
+    static bool HasRawImage()
     {
-        if (Clipboard.ContainsData("PNG") && Clipboard.GetData("PNG") is MemoryStream png)
-            return Decode(png);
-        using var img = Forms.Clipboard.GetImage();
-        if (img == null) return null;
-        var ms = new MemoryStream();
-        img.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-        return Decode(ms);
+        try
+        {
+            var formats = Clipboard.GetDataObject()?.GetFormats(false) ?? Array.Empty<string>();
+            foreach (var f in formats)
+                if (ImageFormats.TryMatch(f, out _)) return true;
+        }
+        catch (ExternalException) { }
+        return false;
     }
 
-    static BitmapSource Decode(Stream s)
+    // The decoded bitmap is for the card and the fingerprint; the raw bytes (when the source app
+    // supplied a real image file) are what we store and later put back on the clipboard.
+    sealed class CapturedImage
     {
-        s.Position = 0;
-        var frame = BitmapDecoder.Create(s, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0];
-        frame.Freeze();
-        return frame;
+        public BitmapSource Bitmap = null!;
+        public byte[]? Bytes;
+        public string? FormatId;
+    }
+
+    static CapturedImage? ReadImage()
+    {
+        try
+        {
+            var formats = Clipboard.GetDataObject()?.GetFormats(false) ?? Array.Empty<string>();
+            string? id = ImageFormats.Best(formats, out string? readFormat);
+            if (id != null && readFormat != null && Clipboard.GetData(readFormat) is MemoryStream stream)
+            {
+                var bytes = stream.ToArray();
+                if (bytes.Length > 0 && bytes.Length <= MaxImageBytes
+                    && Decode(new MemoryStream(bytes)) is { } exact)
+                    return new CapturedImage { Bitmap = exact, Bytes = bytes, FormatId = id };
+            }
+        }
+        catch (Exception e) when (e is ExternalException or IOException or UnauthorizedAccessException)
+        {
+            // fall through to the GDI+ conversion
+        }
+
+        // CF_DIB and friends have no file header, or the format is one WPF cannot decode. A
+        // lossless PNG conversion keeps the pixels (and still restores the image on paste).
+        try
+        {
+            using var img = Forms.Clipboard.GetImage();
+            if (img == null) return null;
+            var ms = new MemoryStream();
+            img.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+            if (Decode(ms) is not { } converted) return null;
+            return new CapturedImage { Bitmap = converted, Bytes = null, FormatId = null };
+        }
+        catch (Exception e) when (e is ExternalException or IOException or System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
+    }
+
+    static BitmapSource? Decode(Stream s)
+    {
+        try
+        {
+            s.Position = 0;
+            var frame = BitmapDecoder.Create(s, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0];
+            frame.Freeze();
+            return frame;
+        }
+        catch (Exception e) when (e is NotSupportedException or FileFormatException or IOException or ArgumentException)
+        {
+            return null;
+        }
     }
 }

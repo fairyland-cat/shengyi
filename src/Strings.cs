@@ -59,8 +59,8 @@ static class S
     public static string FilterClear => T("Clear filters", "清除筛选");
     public static string FilterNoApps => T("No source recorded yet", "暂无来源记录");
     public static string FilterResult => T("{0} results", "{0} 条结果");
-    public static string FilterHint => T("Pinyin works · try app:chrome, tag:phone / tag:手机号, kind:image, in:7d",
-                                         "支持拼音 · 可用 app:chrome、tag:phone / tag:手机号、kind:图片、in:7d");
+    public static string FilterHint => T("Pinyin works · try app:chrome, tag:phone / tag:手机号, cat:音视频 / cat:media, kind:image, in:7d",
+                                         "支持拼音 · 可用 app:chrome、tag:phone / tag:手机号、cat:音视频 / cat:media、kind:图片、in:7d");
     public static string[] FilterKindNames => new[]
     {
         T("Text", "文字"), T("Code", "代码"), T("Links", "链接"), T("Colours", "颜色"),
@@ -200,4 +200,49 @@ static class S
                                             "用本地规则识别手机号、邮箱、快递单、身份证、银行卡、地址、日期、金额和订单号；不联网、不上传任何内容。");
     public static string QuickLookFrom => T("From {0}", "来自 {0}");
     public static string QuickLookTags => T("Tags {0}", "标签 {0}");
+
+    // File categories (v0.6.0): a file card knows whether it holds media, archives, documents...
+    public static string FilterCategoryRow => T("Files", "文件类别");
+    public static string FilterNoCategories => T("No file categories yet", "暂无文件类别");
+
+    // P2 · paste modes (v0.6.0)
+    public static string SectionPasteModes => T("Paste modes", "粘贴方式");
+    public static string MergeNumberTitle => T("Number merged clips", "合并时自动编号");
+    public static string MergeNumberNote => T("Prefix each picked card with 1. 2. 3. …", "给选中的每张卡片加上 1. 2. 3. … 前缀");
+    public static string QuickInsertTitle => T("Quick insert shortcut", "快速插入快捷键");
+    public static string QuickInsertNote => T("Type the latest text (or the first search hit) straight into the focused window without touching the clipboard. Off by default.",
+                                              "把最近一条文字（或搜索首条命中）直接打进当前窗口，完全不动剪贴板。默认关闭。");
+    public static string QuickInsertChordTitle => T("Insert chord", "插入组合键");
+    public static string QuickInsertCopyTitle => T("Copy instead of typing", "改为仅复制");
+    public static string QuickInsertCopyNote => T("Use when Unicode typing is unreliable (terminals, remote desktops).", "终端 / 远程桌面里字符注入不可靠时改用这一项。");
+    public static string SequenceHotkeyTitle => T("Paste sequence shortcut", "逐条粘贴快捷键");
+    public static string SequenceHotkeyNote => T("One press advances to the next clip in a manual sequence. Off by default.", "每按一次粘贴队列里的下一条。默认关闭。");
+    public static string SequenceChordTitle => T("Next-clip chord", "下一条组合键");
+    public static string SequenceIntervalTitle => T("Auto interval", "自动间隔");
+    public static string SequenceIntervalNote => T("Delay between clips when pasting a sequence automatically.", "自动逐条粘贴时，每条之间的间隔。");
+    public static string SequenceCopyTitle => T("Copy only in sequences", "逐条粘贴仅复制");
+    public static string SequenceCopyNote => T("Never simulate Ctrl+V; just put each clip on the clipboard.", "不模拟 Ctrl+V，只把每条内容依次放到剪贴板上。");
+    public static string HotkeyChordNote => T("Write a chord, e.g. Ctrl+3 or Ctrl+Alt+Shift+V", "填写组合键，如 Ctrl+3、Ctrl+Alt+Shift+V");
+    public static string HotkeyChordInvalid => T("Use at least one modifier plus a key, e.g. Ctrl+3", "至少需要一个修饰键加一个按键，例如 Ctrl+3");
+    public static string MsUnit => T(" ms", " 毫秒");
+    public static string AuxHotkeyFailed => T("A paste-mode shortcut is already used by another app. Change it in Settings.", "某个粘贴方式快捷键已被其他程序占用，请在设置里换一个。");
+    public static string SequenceNeedHotkey => T("Enable the paste sequence shortcut in Settings before using manual mode.", "使用手动逐条粘贴前，请先在设置里开启逐条粘贴快捷键。");
+
+    // Item menu, right-click with a Ctrl+Click selection
+    public static string QuickInsertThis => T("Quick insert this (clipboard untouched)", "快速插入这一条（不动剪贴板）");
+    public static string MergeCopyMany => T("Copy {0} clips merged", "合并复制这 {0} 条");
+    public static string MergePasteMany => T("Merge & paste {0} clips", "合并并粘贴这 {0} 条");
+    public static string SequenceManualMany => T("Paste {0} clips one by one…", "逐条粘贴这 {0} 条…");
+    public static string SequenceAutoMany => T("Auto-paste {0} clips…", "自动逐条粘贴这 {0} 条…");
+    public static string MultiClear => T("Clear selection", "清除多选");
+    public static string MergeNeedTwo => T("Ctrl+Click at least two cards to merge.", "请按住 Ctrl 单击选中至少两张卡片再合并。");
+    public static string MergeNoText => T("None of the selected cards has text to merge.", "选中的卡片没有可合并的文字。");
+    public static string MergeCopied => T("Merged {0} clips into the clipboard ({1} skipped).", "已把 {0} 条合并到剪贴板（跳过 {1} 条）。");
+    public static string SequenceStarted => T("Sequence: {0} clips · {1} · next {2} (Esc stops)", "逐条粘贴：{0} 条 · {1} · 下一条 {2}（Esc 中止）");
+    public static string SequenceAuto => T("automatic", "自动");
+    public static string SequenceManual => T("manual", "手动");
+    public static string SequenceStopped => T("Paste sequence stopped.", "逐条粘贴已中止。");
+    public static string QuickInsertNoTarget => T("Open 绳忆 from the window you want to type into, then try quick insert again.", "请先从要输入的窗口里呼出 绳忆，再使用快速插入。");
+    public static string QuickInsertNothing => T("No text clip to insert yet.", "还没有可以插入的文字内容。");
+    public static string QuickInsertCopied => T("Copied (quick insert is set to copy only).", "已复制（快速插入当前设为仅复制）。");
 }
