@@ -14,7 +14,7 @@ using Forms = System.Windows.Forms;
 
 namespace Shengyi;
 
-enum Filter { All, Text, Images, Links, Files, Pinned, Sticky }
+enum Filter { All, Text, Images, Links, Files, Pinned, Sticky, Tags }
 
 // Transparent strip along the top of one monitor. Draws the line and the cards (pinned first),
 // scrolls sideways, and in keyboard mode shows a search bar and takes the keyboard focus.
@@ -22,7 +22,7 @@ enum Filter { All, Text, Images, Links, Files, Pinned, Sticky }
 sealed class LineWindow : Window
 {
     const double LineTop = 7, CardTop = 1, Gap = 18, PinGap = 40, SideMargin = 48, Fade = 36;
-    const int FilterCount = 7;
+    const int FilterCount = 8;
     const double FilterTopGap = 40;
     static double Sag => Theme.RopeSag;
     static double FilterBottom => BarTop + FilterTopGap + SearchFilterPanel.PanelHeight;
@@ -168,7 +168,7 @@ sealed class LineWindow : Window
         {
             (Filter.All, S.FilterAll), (Filter.Text, S.FilterText), (Filter.Images, S.FilterImages),
             (Filter.Links, S.FilterLinks), (Filter.Files, S.FilterFiles), (Filter.Pinned, S.FilterPinned),
-            (Filter.Sticky, S.FilterSticky),
+            (Filter.Sticky, S.FilterSticky), (Filter.Tags, S.FilterTags),
         })
         {
             var label = new TextBlock { Text = text, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
@@ -393,9 +393,13 @@ sealed class LineWindow : Window
         gear.Background = open ? Theme.B(Theme.P.TabOn) : Brushes.Transparent;
         ((TextBlock)gear.Child).Foreground = open ? Theme.B(Theme.P.TabOnInk) : Theme.B(Theme.P.PanelInk);
         if (open)
+        {
             filterPanel.SetApps(store.Items.Where(i => i.SourceApp != null)
                 .GroupBy(i => i.SourceApp!, StringComparer.OrdinalIgnoreCase)
                 .OrderByDescending(g => g.Count()).Select(g => g.Key));
+            filterPanel.SetTags(store.Items.Where(i => i.Tags != null)
+                .SelectMany(i => i.Tags!).Distinct(StringComparer.OrdinalIgnoreCase));
+        }
         UpdateWindowHeight();
         if (relayout) { selected = 0; target = 0; Relayout(false); }
     }
@@ -433,7 +437,7 @@ sealed class LineWindow : Window
         }
 
         var q = SearchQuery.Parse(search.Text, filterPanel.SelectedApps,
-                                  filterPanel.SelectedKinds, filterPanel.WithinDays);
+                                  filterPanel.SelectedKinds, filterPanel.WithinDays, filterPanel.SelectedTags);
         q.AddTab(filter);
         highlight = q.Highlight;
 

@@ -128,6 +128,8 @@ sealed class CardView : Grid
                     Item.CountUses(Theme.FreqWindowDays), Item.TotalUses);
             if (!string.IsNullOrEmpty(Item.SourceApp))
                 tipText.Text += "  ·  " + string.Format(S.SourceTip, Item.SourceApp);
+            if (Item.Tags is { Count: > 0 } tags)
+                tipText.Text += "  ·  " + string.Format(S.TagsTip, string.Join("、", tags.Select(SmartTags.Name)));
         };
         ToolTipService.SetToolTip(frame, tip);
 
@@ -229,6 +231,30 @@ sealed class CardView : Grid
         Children.Add(frame);
         Children.Add(peg);
         Children.Add(number);
+        // What the local recogniser found, as a small badge below the bottom-right corner. It
+        // shares the Ctrl+number baseline, so it never covers the card body or its char counter.
+        if (item.Tags is { Count: > 0 } tags && item.Kind is not (ClipKind.Image or ClipKind.Color))
+        {
+            string main = SmartTags.Primary(tags) ?? "";
+            string more = tags.Count > 1 ? " " + string.Format(S.TagMore, tags.Count - 1) : "";
+            Children.Add(new Border
+            {
+                CornerRadius = new CornerRadius(7),
+                Padding = new Thickness(6, 1, 6, 1),
+                Background = Theme.B(Theme.WithAlpha(p.Accent, 0xE8)),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                // A fixed offset keeps the badge just under the card for every card height;
+                // sharing the keycap baseline pushed it into the keyboard toolbar.
+                Margin = new Thickness(0, 0, 2, -20),
+                IsHitTestVisible = false,
+                Child = new TextBlock
+                {
+                    Text = main + more, FontSize = 9.5, Foreground = Brushes.White,
+                    FontWeight = FontWeights.SemiBold,
+                },
+            });
+        }
         Children.Add(close);
         Restyle();
         ApplyHighlight();

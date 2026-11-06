@@ -20,14 +20,17 @@ static class Preview
         SaveSampleImage(sample);
         var items = new List<ClipItem>
         {
-            new() { Kind = ClipKind.Text, Text = "会议纪要：下周一上午十点在三楼会议室，讨论第四季度的发布计划和人员安排。", Pinned = true },
+            new() { Kind = ClipKind.Text, Text = "会议纪要：下周一上午十点三楼会议室，联系 13800138000 或 team@example.com", Pinned = true,
+                    Tags = new() { SmartTags.Phone, SmartTags.Email } },
             new() { Kind = ClipKind.Image, Image = sample, Width = 1600, Height = 1000 },
             new() { Kind = ClipKind.Link, Text = "https://github.com/alejandrobujan/tendedero" },
             new() { Kind = ClipKind.Code, Text = "function hang(clip) {\n    if (clip.pinned) return;\n    line.unshift(clip);\n}" },
             new() { Kind = ClipKind.Color, Text = "#3B82F6" },
             new() { Kind = ClipKind.Files, Files = new() { @"C:\Windows\notepad.exe", @"C:\Windows\regedit.exe" } },
-            new() { Kind = ClipKind.Text, Text = "Rich text keeps its formatting when pasted.", Html = "<b>x</b>" },
-            new() { Kind = ClipKind.Sticky, Text = "周五前交周报\n下午三点设计评审\n记得买咖啡豆", NoteColor = "#FFF3B0", Time = DateTime.Now },
+            new() { Kind = ClipKind.Text, Text = "Rich text keeps its formatting when pasted. 2026-11-06 ¥1,280.50", Html = "<b>x</b>",
+                    Tags = new() { SmartTags.Date, SmartTags.Amount } },
+            new() { Kind = ClipKind.Sticky, Text = "11月6日前交周报\n下午三点设计评审\n记得买咖啡豆", NoteColor = "#FFF3B0", Time = DateTime.Now,
+                    Tags = new() { SmartTags.Date } },
         };
 
         const double W = 1440, Row = 190;

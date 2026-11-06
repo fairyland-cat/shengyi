@@ -239,6 +239,8 @@ sealed class SettingsWindow : ChromeWindow
         recordSource.Changed += () => Result.RecordSourceApp = recordSource.IsOn;
         var fuzzy = new Toggle(Result.FuzzySearch);
         fuzzy.Changed += () => Result.FuzzySearch = fuzzy.IsOn;
+        var tagging = new Toggle(Result.SmartTagging);
+        tagging.Changed += () => Result.SmartTagging = tagging.IsOn;
         var startup = new Toggle(startWithWindows);
         startup.Changed += () => StartWithWindows = startup.IsOn;
         var max = Fields.Stepper(Result.MaxItems, 50, 2000, 50, v => Result.MaxItems = v);
@@ -316,7 +318,8 @@ sealed class SettingsWindow : ChromeWindow
         var right = new StackPanel();
         right.Children.Add(Card(S.SectionSearch,
             Row(S.RecordSourceTitle, S.RecordSourceNote, recordSource),
-            Row(S.FuzzyTitle, S.FuzzyNote, fuzzy)));
+            Row(S.FuzzyTitle, S.FuzzyNote, fuzzy),
+            Row(S.SmartTagsTitle, S.SmartTagsNote, tagging)));
         right.Children.Add(Spaced(Card(S.SectionRanking,
             Row(S.FreqThresholdTitle, S.FreqThresholdNote, freqThreshold),
             Row(S.FreqWindowTitle, S.FreqWindowNote, freqWindow))));

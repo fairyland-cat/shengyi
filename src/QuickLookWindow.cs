@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -32,13 +34,37 @@ sealed class QuickLookWindow : Window
             ClipKind.Color => ColorView(item),
             _ => TextView(item),
         };
-        Content = new Grid { Margin = new Thickness(48), Children = { content } };
+        Content = new Grid { Margin = new Thickness(48), Children = { content, MetaBar(item) } };
 
         SourceInitialized += (_, _) => Place();
         PreviewKeyDown += (_, e) => { if (e.Key is Key.Escape or Key.Space) { e.Handled = true; Close(); } };
         MouseLeftButtonUp += (_, _) => { if (item.Kind == ClipKind.Image || !content.IsMouseOver) Close(); };
         Deactivated += (_, _) => { if (!closing) Close(); };
         Closing += (_, _) => closing = true;
+    }
+
+    // Provenance and the local smart tags, shown under the preview so a card's origin and
+    // classification are visible even when the content itself is an image.
+    static FrameworkElement MetaBar(ClipItem item)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrEmpty(item.SourceApp)) parts.Add(string.Format(S.QuickLookFrom, item.SourceApp));
+        if (item.Tags is { Count: > 0 } tags)
+            parts.Add(string.Format(S.QuickLookTags, string.Join(" · ", tags.Select(SmartTags.Name))));
+        parts.Add(item.Time.ToString("yyyy-MM-dd HH:mm"));
+        return new Border
+        {
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            CornerRadius = new CornerRadius(9),
+            Padding = new Thickness(14, 7, 14, 7),
+            Background = new SolidColorBrush(Color.FromArgb(0xA0, 0x18, 0x1B, 0x22)),
+            Child = new TextBlock
+            {
+                Text = string.Join("   ·   ", parts), FontSize = 12,
+                Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center,
+            },
+        };
     }
 
     static FrameworkElement TextView(ClipItem item)

@@ -50,7 +50,13 @@ sealed partial class ClipItem
         var parts = new List<string>();
         if (!string.IsNullOrEmpty(SourceApp)) parts.Add(SourceApp);
         if (Formats != null) parts.AddRange(Formats);
-        if (Tags != null) parts.AddRange(Tags);
+        if (Tags != null)
+            foreach (var tag in Tags)
+            {
+                parts.Add(tag);
+                string name = SmartTags.Name(tag);   // "手机号" as well as "phone"
+                if (!string.Equals(name, tag, System.StringComparison.OrdinalIgnoreCase)) parts.Add(name);
+            }
         if (!string.IsNullOrEmpty(FileCategory)) parts.Add(FileCategory);
         if ((int)Kind >= 0 && (int)Kind < KindWords.Length) parts.Add(KindWords[(int)Kind]);
         return string.Join(" ", parts);

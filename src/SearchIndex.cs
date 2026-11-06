@@ -110,6 +110,7 @@ sealed class SearchIndex
         if (q.PinnedOnly && !i.Pinned) return false;
         if (q.Apps.Count > 0 && (i.SourceApp == null || !q.Apps.Contains(i.SourceApp))) return false;
         if (q.Tags.Count > 0 && (i.Tags == null || !q.Tags.Overlaps(i.Tags))) return false;
+        if (q.TaggedOnly && i.Tags is not { Count: > 0 }) return false;
         if (q.WithinDays > 0 && i.Time < from) return false;
         return true;
     }

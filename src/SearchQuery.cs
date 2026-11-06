@@ -14,9 +14,11 @@ sealed class SearchQuery
     public HashSet<ClipKind> Kinds { get; } = new();
     public int WithinDays { get; set; }
     public bool PinnedOnly { get; set; }
+    public bool TaggedOnly { get; set; }
 
     public bool HasTerms => Terms.Count > 0;
-    public bool HasFilters => Apps.Count > 0 || Tags.Count > 0 || Kinds.Count > 0 || WithinDays > 0 || PinnedOnly;
+    public bool HasFilters => Apps.Count > 0 || Tags.Count > 0 || Kinds.Count > 0
+        || WithinDays > 0 || PinnedOnly || TaggedOnly;
     public string Highlight => string.Join(" ", Terms);
 
     // The quick filter tabs are just another kind filter; they combine with the panel choices.
@@ -32,15 +34,17 @@ sealed class SearchQuery
             case Filter.Files: Kinds.Add(ClipKind.Files); break;
             case Filter.Sticky: Kinds.Add(ClipKind.Sticky); break;
             case Filter.Pinned: PinnedOnly = true; break;
+            case Filter.Tags: TaggedOnly = true; break;
         }
     }
 
     public static SearchQuery Parse(string input, IEnumerable<string>? apps = null,
-        IEnumerable<ClipKind>? kinds = null, int withinDays = 0)
+        IEnumerable<ClipKind>? kinds = null, int withinDays = 0, IEnumerable<string>? tags = null)
     {
         var q = new SearchQuery { WithinDays = withinDays };
         if (apps != null) foreach (var a in apps) q.Apps.Add(a);
         if (kinds != null) foreach (var k in kinds) q.Kinds.Add(k);
+        if (tags != null) foreach (var t in tags) q.Tags.Add(SmartTags.Canonical(t));
 
         foreach (var raw in (input ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries))
         {
@@ -56,7 +60,7 @@ sealed class SearchQuery
                     switch (key)
                     {
                         case "app": q.Apps.Add(value); continue;
-                        case "tag": q.Tags.Add(value); continue;
+                        case "tag": q.Tags.Add(SmartTags.Canonical(value)); continue;
                         case "kind": if (TryKind(value, out var kind)) q.Kinds.Add(kind); continue;
                         case "in":
                             if (int.TryParse(value.TrimEnd('d', 'D'), out int days) && days > 0)

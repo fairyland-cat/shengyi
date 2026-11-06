@@ -42,7 +42,7 @@ sealed partial class ClipItem
     // All optional: clips.json written by older versions loads unchanged.
     public string? SourceApp { get; set; }            // process name without .exe, e.g. "chrome"
     public List<string>? Formats { get; set; }        // clipboard format names, e.g. "HTML Format"
-    public List<string>? Tags { get; set; }           // smart tags, e.g. "tag:phone"
+    public List<string>? Tags { get; set; }           // canonical smart tags, e.g. "phone" (see SmartTags.cs)
     public string? FileCategory { get; set; }         // file cards: media / archive / document / ...
 
     // How often the card was taken from 绳忆. TotalUses never decreases; UseTimes holds the UTC
@@ -184,6 +184,26 @@ sealed class ClipStore : IDisposable
         return Index.Search(q, settings().FuzzySearch);
     }
 
+    // Smart tags are derived, never authoritative: clips.json is still the only source of truth.
+    // Turning recognition off removes only the tags we generated, leaving any unknown/manual ones.
+    void Retag(ClipItem item)
+    {
+        if (settings().SmartTagging) item.Tags = SmartTags.Analyze(item);
+        else if (item.Tags != null)
+        {
+            var rest = item.Tags.Where(t => !SmartTags.IsKnown(t)).ToList();
+            item.Tags = rest.Count > 0 ? rest : null;
+        }
+    }
+
+    // Recompute tags for history that predates the feature, and right after the setting changes.
+    public void RefreshTags()
+    {
+        foreach (var item in Items) Retag(item);
+        Version++;                 // tags are part of the indexed metadata
+        ScheduleSave();
+    }
+
     const int MaxUseTimes = 2000;          // safety cap per card
     const int KeepUseDays = 90;            // longest selectable window
 
@@ -227,6 +247,7 @@ sealed class ClipStore : IDisposable
             ScheduleSave();
             return;
         }
+        Retag(item);
         if (bitmap != null)
         {
             item.Image = item.Id + ".png";
@@ -274,6 +295,7 @@ sealed class ClipStore : IDisposable
         item.Hash = "n:" + item.Id;   // a unique namespace: notes never dedupe with copied text
         item.Html = item.Rtf = item.Image = null;
         item.Files = null;
+        Retag(item);
         Items.Insert(0, item);
         ScheduleSave();
     }
@@ -285,7 +307,8 @@ sealed class ClipStore : IDisposable
         item.Text = text;
         item.NoteColor = color;
         item.Html = item.Rtf = null;
-        Version++;                 // the note's words are indexed
+        Retag(item);
+        Version++;                 // the note's words and tags are indexed
         Updated?.Invoke(item);
         ScheduleSave();
     }
@@ -325,7 +348,8 @@ sealed class ClipStore : IDisposable
         item.Html = item.Rtf = null;
         item.Kind = Classify.Text(text);
         item.Hash = Classify.HashText(text);
-        Version++;                 // edited text changes the indexed words
+        Retag(item);
+        Version++;                 // edited text changes the indexed words and tags
         Updated?.Invoke(item);
         ScheduleSave();
     }
@@ -389,7 +413,12 @@ sealed class ClipStore : IDisposable
         {
             var list = JsonSerializer.Deserialize<List<ClipItem>>(File.ReadAllText(IndexPath));
             foreach (var item in list ?? new())
-                if (item.Kind != ClipKind.Image || File.Exists(item.ImagePath)) Items.Add(item);
+            {
+                if (item.Kind == ClipKind.Image && !File.Exists(item.ImagePath)) continue;
+                // History saved before v0.5.0 gets recognised too, without changing its order.
+                Retag(item);
+                Items.Add(item);
+            }
         }
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { }
     }

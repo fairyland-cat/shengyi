@@ -43,6 +43,13 @@ static class Shots
         searchLine.SetQuery("zhoubao"); // "周报" typed as pinyin
         searchLine.SetFiltersOpen(true);
 
+        // A third off-screen line shows smart tags: tag:phone in the box and the tag chips.
+        var tagLine = new LineWindow(Forms.Screen.PrimaryScreen!, store, actions, () => settings);
+        windows.Add(tagLine);
+        tagLine.Reveal(keyboard: true);
+        tagLine.SetQuery("tag:phone");
+        tagLine.SetFiltersOpen(true);
+
         var prefs = new SettingsWindow(settings, true, () => { }, () => { })
         {
             WindowStartupLocation = WindowStartupLocation.Manual, Left = -20000, Top = -20000, ShowActivated = false,
@@ -53,9 +60,11 @@ static class Shots
         {
             Save(Scene(Snapshot((FrameworkElement)line.Content), line.Height), System.IO.Path.Combine(folder, "line.png"));
             Save(Scene(Snapshot((FrameworkElement)searchLine.Content), searchLine.Height, desktop: false), System.IO.Path.Combine(folder, "search.png"));
+            Save(Scene(Snapshot((FrameworkElement)tagLine.Content), tagLine.Height, desktop: false), System.IO.Path.Combine(folder, "tags.png"));
             Save((FrameworkElement)prefs.Content, System.IO.Path.Combine(folder, "settings.png"));
             line.Close();
             searchLine.Close();
+            tagLine.Close();
             prefs.Close();
             store.Dispose();
             Preview.Render(System.IO.Path.Combine(folder, "cards.png"), done);
@@ -96,6 +105,11 @@ static class Shots
         store.Add(new ClipItem { Kind = ClipKind.Image, Hash = ImageHash.Of(photo), SourceApp = "snippingtool" }, photo);
         Text("周报：本周完成了剪贴板历史的搜索、固定和卡片样式，下周开始做安装包和使用文档。", uses: 8, app: "notepad");
         Text("下周一上午十点，三楼会议室，讨论第四季度发布计划。", uses: 1, app: "outlook");
+        // Samples with recognisable entities: the corner pills and the tag drawer need real tags.
+        Text("客户电话 13800138000，邮箱 zhoubao@example.com", app: "wechat");
+        Text("收货地址：北京市朝阳区建国路88号，11月6日前送达", app: "notepad");
+        Text("订单号: AB20261106000123 合计 ¥1,280.50", app: "chrome");
+        Text("顺丰快递 SF1234567890123 已发出", app: "wechat");
         void Note(string t, string color) =>
             store.AddSticky(new ClipItem { Kind = ClipKind.Sticky, Text = t, NoteColor = color });
         Note("待办：\n· 预约体检\n· 回复设计稿", "#DDEBFA");

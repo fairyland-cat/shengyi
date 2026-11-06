@@ -27,6 +27,7 @@ sealed class Settings
     // old behaviour (plain substring search, no provenance written into clips.json).
     public bool RecordSourceApp { get; set; } = true;  // also stores the clipboard format list
     public bool FuzzySearch { get; set; } = true;      // subsequence fallback when nothing matches
+    public bool SmartTagging { get; set; } = true;     // local regex entity tags; nothing leaves the machine
 
     // Appearance. Defaults reproduce the original 绳忆 look exactly.
     public string ThemeName { get; set; } = "soft";        // soft | silver | linen | porcelain | graphite

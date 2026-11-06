@@ -51,7 +51,7 @@ sealed class FilterChip : Border
 // collects state — LineWindow turns it into a SearchQuery and the store does the actual lookup.
 sealed class SearchFilterPanel : Border
 {
-    public const double PanelHeight = 150;
+    public const double PanelHeight = 176;   // four chip rows (source / tags / type / time) + hint
 
     static readonly ClipKind[] KindOrder =
     {
@@ -61,19 +61,22 @@ sealed class SearchFilterPanel : Border
 
     public event Action? Changed;
 
-    readonly WrapPanel appRow = new(), kindRow = new();
+    readonly WrapPanel appRow = new(), tagRow = new(), kindRow = new();
     readonly StackPanel timeChipsRow = new() { Orientation = Orientation.Horizontal };
-    readonly List<FilterChip> appChips = new(), kindChips = new(), timeChips = new();
+    readonly List<FilterChip> appChips = new(), tagChips = new(), kindChips = new(), timeChips = new();
     readonly List<TextBlock> texts = new();
     readonly HashSet<string> selectedApps = new(StringComparer.OrdinalIgnoreCase);
+    readonly HashSet<string> selectedTags = new(StringComparer.OrdinalIgnoreCase);
     readonly TextBlock countText, hintText, clear;
-    readonly TextBlock appEmpty;
+    readonly TextBlock appEmpty, tagEmpty;
     int withinDays;
 
     public IEnumerable<string> SelectedApps => selectedApps;
+    public IEnumerable<string> SelectedTags => selectedTags;
     public IEnumerable<ClipKind> SelectedKinds => kindChips.Where(c => c.IsOn).Select(c => (ClipKind)c.Value!);
     public int WithinDays => withinDays;
-    public bool HasAny => selectedApps.Count > 0 || kindChips.Any(c => c.IsOn) || withinDays > 0;
+    public bool HasAny => selectedApps.Count > 0 || selectedTags.Count > 0
+        || kindChips.Any(c => c.IsOn) || withinDays > 0;
 
     public SearchFilterPanel()
     {
@@ -111,6 +114,7 @@ sealed class SearchFilterPanel : Border
         timeChips[0].SetOn(true);
 
         appEmpty = new TextBlock { Text = S.FilterNoApps, FontSize = 11, Margin = new Thickness(0, 4, 0, 0) };
+        tagEmpty = new TextBlock { Text = S.FilterNoTags, FontSize = 11, Margin = new Thickness(0, 4, 0, 0) };
         countText = new TextBlock { FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 4) };
         clear = new TextBlock
         {
@@ -131,6 +135,7 @@ sealed class SearchFilterPanel : Border
 
         var stack = new StackPanel();
         stack.Children.Add(Row(S.FilterSource, appRow));
+        stack.Children.Add(Row(S.FilterTagRow, tagRow));
         stack.Children.Add(Row(S.FilterKind, kindRow));
         stack.Children.Add(Row(S.FilterTime, timeDock));
         stack.Children.Add(hintText);
@@ -180,13 +185,43 @@ sealed class SearchFilterPanel : Border
         Restyle();
     }
 
+    // Only tags that actually occur get a chip. Canonical ids come from SmartTags; the label is
+    // localised, so the chip reads 手机号 while tag:phone keeps working in the search box.
+    public void SetTags(IEnumerable<string> tags)
+    {
+        tagRow.Children.Clear();
+        tagChips.Clear();
+        var present = new HashSet<string>(tags.Where(SmartTags.IsKnown), StringComparer.OrdinalIgnoreCase);
+        var list = SmartTags.All.Where(present.Contains).Take(9).ToList();
+        if (list.Count == 0)
+        {
+            tagRow.Children.Add(tagEmpty);
+            return;
+        }
+        foreach (var tag in list)
+        {
+            var chip = new FilterChip(SmartTags.Name(tag), tag);
+            chip.SetOn(selectedTags.Contains(tag));
+            chip.Changed += () =>
+            {
+                if (chip.IsOn) selectedTags.Add(tag); else selectedTags.Remove(tag);
+                Fire();
+            };
+            tagChips.Add(chip);
+            tagRow.Children.Add(chip);
+        }
+        Restyle();
+    }
+
     public void SetCount(int n) => countText.Text = string.Format(S.FilterResult, n);
 
     public void Reset()
     {
         selectedApps.Clear();
+        selectedTags.Clear();
         withinDays = 0;
         foreach (var c in appChips) c.SetOn(false);
+        foreach (var c in tagChips) c.SetOn(false);
         foreach (var c in kindChips) c.SetOn(false);
         for (int i = 0; i < timeChips.Count; i++) timeChips[i].SetOn(i == 0);
     }
@@ -200,8 +235,9 @@ sealed class SearchFilterPanel : Border
         countText.Foreground = ink;
         clear.Foreground = ink;
         appEmpty.Foreground = ink;
+        tagEmpty.Foreground = ink;
         hintText.Foreground = Theme.B(Theme.WithAlpha(Theme.P.PanelInk, 0xAA));
-        foreach (var c in appChips.Concat<FilterChip>(kindChips).Concat(timeChips)) c.Repaint();
+        foreach (var c in appChips.Concat<FilterChip>(tagChips).Concat(kindChips).Concat(timeChips)) c.Repaint();
     }
 
     void Fire() => Changed?.Invoke();

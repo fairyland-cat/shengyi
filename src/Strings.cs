@@ -59,8 +59,8 @@ static class S
     public static string FilterClear => T("Clear filters", "清除筛选");
     public static string FilterNoApps => T("No source recorded yet", "暂无来源记录");
     public static string FilterResult => T("{0} results", "{0} 条结果");
-    public static string FilterHint => T("Pinyin works · try app:chrome, tag:phone, kind:image, in:7d",
-                                         "支持拼音 · 可用 app:chrome、tag:phone、kind:图片、in:7d");
+    public static string FilterHint => T("Pinyin works · try app:chrome, tag:phone / tag:手机号, kind:image, in:7d",
+                                         "支持拼音 · 可用 app:chrome、tag:phone / tag:手机号、kind:图片、in:7d");
     public static string[] FilterKindNames => new[]
     {
         T("Text", "文字"), T("Code", "代码"), T("Links", "链接"), T("Colours", "颜色"),
@@ -188,4 +188,16 @@ static class S
     public static string DeleteStickyConfirm => T("Delete this sticky note? It will not come back.", "删除这张便签？此操作不可撤销。");
     public static string FilterSticky => T("Notes", "便签");
     public static string NewStickyKey => T(" · Ctrl+N note", " · Ctrl+N 便签");
+
+    // Smart tags (v0.5.0): all recognition is local, no data leaves the machine.
+    public static string FilterTags => T("Tagged", "已识别");
+    public static string FilterTagRow => T("Tags", "标签");
+    public static string FilterNoTags => T("No recognised tags yet", "暂无已识别标签");
+    public static string TagsTip => T("Tags: {0}", "标签：{0}");
+    public static string TagMore => T("+{0}", "+{0}");
+    public static string SmartTagsTitle => T("Smart tags", "智能标签");
+    public static string SmartTagsNote => T("Spot phone numbers, emails, waybills, ID/card numbers, addresses, dates, amounts and order numbers with local rules. Nothing is uploaded.",
+                                            "用本地规则识别手机号、邮箱、快递单、身份证、银行卡、地址、日期、金额和订单号；不联网、不上传任何内容。");
+    public static string QuickLookFrom => T("From {0}", "来自 {0}");
+    public static string QuickLookTags => T("Tags {0}", "标签 {0}");
 }

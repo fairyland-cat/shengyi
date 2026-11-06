@@ -145,6 +145,7 @@ sealed class AppController : IDisposable
         }
         settings = next;
         settings.Save();
+        store.RefreshTags();   // re-recognise history when 智能标签 was toggled
         Theme.Apply(settings); // repaints every line window and rebuilds its cards
         hook.Enabled = settings.ReplaceWinV;
         try { Autostart.Enabled = w.StartWithWindows; }
