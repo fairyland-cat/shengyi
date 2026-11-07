@@ -1,6 +1,6 @@
 # 绳忆 (shengyi)
 
-> **致谢**：绳忆的「晾衣绳」基于开源项目 DUN [DUN](https://github.com/sandun2027/DUN) 做的 Window 小工具。DUN的功能和流畅度都很喜欢，可惜想要的一些功能没有支持，绳忆在它的基础上扩展了主题配色、按取用频率排序、便签等功能。
+> **致谢**：绳忆的「晾衣绳」是基于开源项目  [DUN](https://github.com/sandun2027/DUN) 做的 Window 小工具。DUN的功能和流畅度都很喜欢，可惜想要的一些功能没有支持，绳忆在它的基础上扩展了主题配色、按取用频率排序、便签等功能。
 >
 > 内置拼音码表来自 [mozillazg/pinyin-data](https://github.com/mozillazg/pinyin-data) 的《通用规范汉字表》读音数据（MIT，© 2016 mozillazg），仅用于本地全拼 / 首字母检索。
 
