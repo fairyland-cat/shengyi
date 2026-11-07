@@ -1,4 +1,4 @@
-// 绳忆 installer window. Compiled with the C# 5 compiler that ships with Windows (.NET Framework 4.x),
+﻿// 绳忆 installer window. Compiled with the C# 5 compiler that ships with Windows (.NET Framework 4.x),
 // so it runs on any Windows 10/11 without extra downloads. The actual install is done by the embedded
 // Inno Setup engine (installer/shengyi.iss), run silently; this window shows its progress.
 using System;

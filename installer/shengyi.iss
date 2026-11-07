@@ -1,11 +1,11 @@
-; Install engine for shengyi. scripts/build-release.ps1 builds it with AppVersion and PublishDir (the
+﻿; Install engine for shengyi. scripts/build-release.ps1 builds it with AppVersion and PublishDir (the
 ; self-contained `dotnet publish` output) and embeds it in the installer window (installer/shell),
 ; which runs it silently and reads the SHENGYI_PROGRESS lines it writes to its log. Its uninstaller is
 ; what "Apps > Installed apps" uses.
 
 #define AppName "绳忆"
 #ifndef AppVersion
-  #define AppVersion "0.6.0"
+  #define AppVersion "0.6.1"
 #endif
 #ifndef PublishDir
   #define PublishDir "..\dist\publish"

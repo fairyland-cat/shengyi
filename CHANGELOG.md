@@ -24,7 +24,26 @@
 5. 推送源码，新建 GitHub tag `v<版本>` 与同名 Release，上传上述产物（仓库外的 `sync_release.py` 会按 csproj 的版本自动完成）。
 
 > 关于窗口与安装程序窗口的版本号取自程序集版本，不用手改；README 里的 `x.y.z` 是占位符，也不用改。
-> 没有 Inno Setup 时只能产出便携版，安装版需在装有 Inno Setup 6 的机器上跑第 4 步。
+> 没有 Inno Setup 6/7 时只能产出便携版；安装版需在第 4 步前装好 Inno Setup（推荐 7.1.1），或用 `-Iscc` 指定非默认安装路径。
+
+## [0.6.1] - 2026-11-07
+
+构建与发布链路修复。**只修缺陷、不新增功能，故修订号 +1**（0.6.0 → 0.6.1）。应用功能与 `clips.json` 数据格式不变。
+
+### 修复
+
+- **Inno Setup 7 适配**：`scripts/build-release.ps1` 按 7 → 6 顺序自动探测 ISCC（7 优先），支持 `-Iscc` / `-Dotnet` 手动指定路径；PATH 上的 `dotnet` 只有运行时时自动回退到便携 SDK；不再清空 `dist/` 里的历史版本产物。已用官方 7.1.1（2026-10-28）实机编译通过，仓库自带的 `ChineseSimplified.isl` 无需改动。
+- **首次完整跑通打包脚本**，修复 4 处此前只在完整执行时才会暴露的本机缺陷：
+  1. `[xml](Get-Content ...)` 在 Windows PowerShell 5.1 收到字符串数组，类型转换失败 → 改为显式按 UTF-8 读取 `shengyi.csproj` 并用正则提取 `<Version>`；
+  2. `Get-Content -Raw` 按系统 ANSI 代码页解码 UTF-8 的 csproj，中文 `<Description>` 破坏 XML → 同上修复；
+  3. `installer/shengyi.iss` 与 `installer/shell/Setup.cs` 缺少 UTF-8 BOM，会被 ISCC / .NET Framework 编译器按 ANSI 读成乱码（产品名、安装目录名）→ 两文件补 BOM；
+  4. 本机把 `Remove-Item` 包装成回收站式安全删除，清理 `dist/publish` 大目录时 fail-closed → 改用 .NET 目录 API；旧便携 exe 若正被运行中的绳忆占用则跳过覆盖并保留原文件，安装程序仍取自本次 publish 输出。
+- **安装程序首次作为正式产物发布**：`shengyi-Setup-0.6.1.exe` 随 Release 一同提供（未做代码签名，首次运行会触发 SmartScreen 的「未知发布者」提示）。仓库外的发布脚本同步改为上传安装版并更新下载说明。
+
+### 说明
+
+- 卡片尺寸按内容类型固定（文字 150×104、代码 184×104 等），只有图片卡随宽高比变化。经确认这是既有设定而非缺陷，本次不调整。
+- `docs/setup-*.png` 与 README、CHANGELOG 里「需 Inno Setup 6」的措辞同步更新为 6/7。
 
 ## [0.6.0] - 2026-11-06
 

@@ -180,7 +180,7 @@ powershell -File scripts\build-release.ps1   # 在 dist\ 生成安装包、便�
 新增功能后先按 [CHANGELOG.md](CHANGELOG.md) 的规则升 `shengyi.csproj` 的 `<Version>` 并写变更记录；
 构建脚本会自动调用版本检查，版本号没变或忘了写 CHANGELOG 会直接拒绝打包。产物名里的版本号由 csproj 读取。
 
-打包还需要 [Inno Setup 6](https://jrsoftware.org/isinfo.php)（`winget install JRSoftware.InnoSetup`）。
+打包还需要 [Inno Setup 6 或 7](https://jrsoftware.org/isinfo.php)（推荐 7.1.1：`winget install --id JRSoftware.InnoSetup.7 -e`；装在非默认目录时用 `-Iscc "<ISCC.exe 路径>"` 指定）。
 README 里的截图由 `shengyi.exe --shots docs` 生成：用示例数据离屏渲染，不会读取你的剪贴板历史；
 安装程序的截图用 `shengyi-Setup-x.y.z.exe --shot docs\setup-ready.png ready`（也可以是 `installing`、`done`）。
 
