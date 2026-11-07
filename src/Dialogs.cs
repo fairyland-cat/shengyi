@@ -282,10 +282,15 @@ sealed class SettingsWindow : ChromeWindow
         // ---- Appearance ----------------------------------------------------
         var preview = new AppearancePreview { HorizontalAlignment = HorizontalAlignment.Stretch };
         var tintStrip = new StackPanel { Orientation = Orientation.Horizontal };
+        TextBlock? cardColorHint = null;
         void Refresh()
         {
             preview.Update(Result);
             var scheme = CardTints.Find(Result.CardTintScheme);
+            // Content colours repaint five card kinds wholesale; tell the user what the classic
+            // "Card colour" setting still reaches instead of leaving a stale, misleading note.
+            if (cardColorHint != null)
+                cardColorHint.Text = scheme != null ? S.CardColorNoteTinted : S.CardColorNote;
             tintStrip.Children.Clear();
             for (int i = 0; i < CardTints.KindCount; i++)
             {
@@ -369,7 +374,6 @@ sealed class SettingsWindow : ChromeWindow
         var noteSwatches = new Swatches(Theme.NotePresets.Select(Theme.ParseHex).ToArray(),
             noteIndex, i => S.NoteColorNames[i]);
         noteSwatches.Changed += i => Result.NoteColor = Theme.NotePresets[i];
-        Refresh();
 
         var left = new StackPanel();
         left.Children.Add(Card(S.SectionShortcut,
@@ -388,10 +392,12 @@ sealed class SettingsWindow : ChromeWindow
             Row(S.SequenceChordTitle, S.HotkeyChordNote, seqChord),
             Row(S.SequenceIntervalTitle, S.SequenceIntervalNote, seqInterval),
             Row(S.SequenceCopyTitle, S.SequenceCopyNote, seqCopy))));
+        var cardColorRow = Stacked(S.CardColorTitle, S.CardColorNote, cardSwatches);
+        cardColorHint = cardColorRow.Children.Count > 1 ? cardColorRow.Children[1] as TextBlock : null;
         left.Children.Add(Spaced(Card(S.SectionAppearance,
             Stacked(S.ThemeTitle, S.ThemeNote, themePicker),
             Stacked(S.AccentTitle, S.AccentNote, accentSwatches),
-            Stacked(S.CardColorTitle, S.CardColorNote, cardSwatches),
+            cardColorRow,
             Row(S.CardColorCustom, null, hexField))));
         left.Children.Add(Spaced(Card(S.SectionTints,
             Stacked(S.TintSchemeTitle, S.TintSchemeNote, schemeBox),
@@ -401,6 +407,8 @@ sealed class SettingsWindow : ChromeWindow
             Row(S.TintStrengthTitle, S.TintStrengthNote, strength),
             Row(S.TintStickyTitle, S.TintStickyNote, stickyOn),
             Row(S.TintFineTitle, S.TintFineNote, fineOn))));
+        // Every row exists now; refresh once so the appearance note matches the saved scheme.
+        Refresh();
 
         var right = new StackPanel();
         right.Children.Add(Card(S.SectionSearch,

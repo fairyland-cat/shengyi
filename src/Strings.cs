@@ -128,7 +128,7 @@ static class S
     // Appearance
     public static string SectionAppearance => T("Appearance", "外观");
     public static string ThemeTitle => T("Theme", "主题");
-    public static string ThemeNote => T("Palette for the rope, pegs, cards and windows", "绳子、夹子、卡片与窗口的配色");
+    public static string ThemeNote => T("Base palette for windows, pegs, colour chips and photos; also the rope when its gradient is off", "窗口、夹子、色值卡与图片卡的底层配色；绳子渐变关闭时也决定绳子基色");
     public static string[] ThemeNames => new[]
     {
         T("Warm", "暖纸"), T("Silver", "冷银"), T("Linen", "亚麻"), T("Porcelain", "瓷白"), T("Graphite", "石墨"),
@@ -140,7 +140,10 @@ static class S
         T("Blue", "蓝"), T("Terra", "陶土"), T("Mint", "薄荷"), T("Navy", "藏青"),
     };
     public static string CardColorTitle => T("Card colour", "卡片颜色");
-    public static string CardColorNote => T("Applies to notes, links and file cards", "作用于便签、链接和文件卡片");
+    public static string CardColorNote => T("Applies to every card, colour-chip/photo frames and sticky paper", "作用于所有卡片、色值卡与图片卡外框、便签纸色");
+    // Shown instead when a content-colour scheme is active: those five card kinds are then
+    // painted by the scheme, so this setting only reaches what the scheme deliberately skips.
+    public static string CardColorNoteTinted => T("Content colours are on: only colour chips, photos, sticky paper and windows still follow this", "已按类型配色：此设置现在只作用于色值卡、图片卡、便签纸色与窗口");
     public static string CardColorCustom => T("Custom (#RRGGBB)", "自定义（#RRGGBB）");
     public static string[] CardColorNames => new[]
     {
@@ -150,7 +153,7 @@ static class S
     // 0.7.0 · content-tinted cards + spliced rope
     public static string SectionTints => T("Content colours", "按类型配色");
     public static string TintSchemeTitle => T("Card palette", "卡片配色方案");
-    public static string TintSchemeNote => T("Colour cards by content type; colour chips and photos keep the theme", "按内容类型给卡片上色；色值卡与图片卡保持主题原色");
+    public static string TintSchemeNote => T("Layered on the theme: tints text/link/code/file/note cards; windows, pegs, colour chips and photos still follow the theme", "叠在主题之上：只给文字 / 链接 / 代码 / 文件 / 便签上色；窗口、夹子、色值卡与图片卡仍由主题决定");
     public static string TintSchemeOff => T("Off (classic look)", "关闭（保持旧配色）");
     public static string TintRopeTitle => T("Rope gradient", "绳子拼接渐变");
     public static string TintRopeNote => T("Dye only the stretches where cards hang; bare rope stays hemp-coloured", "只染挂着卡片的绳段，空绳段保持麻绳本色");

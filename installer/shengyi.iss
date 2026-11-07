@@ -5,7 +5,7 @@
 
 #define AppName "绳忆"
 #ifndef AppVersion
-  #define AppVersion "0.7.0"
+  #define AppVersion "0.7.1"
 #endif
 #ifndef PublishDir
   #define PublishDir "..\dist\publish"

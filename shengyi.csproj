@@ -11,7 +11,7 @@
     <ApplicationIcon>assets\shengyi.ico</ApplicationIcon>
     <RootNamespace>Shengyi</RootNamespace>
     <AssemblyName>shengyi</AssemblyName>
-    <Version>0.7.0</Version>
+    <Version>0.7.1</Version>
     <Product>绳忆</Product>
     <Authors>shengyi</Authors>
     <Company>shengyi</Company>
