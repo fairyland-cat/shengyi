@@ -68,6 +68,43 @@ static class Theme
     public static int FreqThreshold => Math.Clamp(snapshot.FreqThreshold, 0, 20);
     public static int FreqWindowDays => Math.Clamp(snapshot.FreqWindowDays, 1, 90);
 
+    // ---- 0.7.0 · content-tinted cards ---------------------------------------
+    // The tint scheme lives in Settings but every card / line reads it through Theme, so
+    // Theme.Changed (raised by Apply) repaints everything after a settings save.
+    public static Color Wpf(Rgb c) => Color.FromRgb(c.R, c.G, c.B);
+    public static Rgb RgbOf(Color c) => new(c.R, c.G, c.B);
+
+    public static string SchemeId => string.IsNullOrWhiteSpace(snapshot.CardTintScheme)
+        ? CardTints.Off : snapshot.CardTintScheme!;
+    public static bool TintsOn => CardTints.Find(SchemeId) != null;
+    public static Rgb RopeBase => CardTints.RopeOf(SchemeId, RgbOf(P.Rope));
+    public static bool RopeGradientOn => snapshot.RopeGradient && TintsOn;
+    public static double RopeStrength => Math.Clamp(snapshot.RopeTintStrength, 0, 100) / 100.0;
+    public static bool RopeBanded => snapshot.RopeGradientBanded;
+    public static bool FineGrainedTints => snapshot.FineGrainedFileTints;
+
+    public readonly record struct CardPaintColors(Color Top, Color Bottom, Color Border, Color Ink, Color Dim);
+
+    /// <summary>The colour a card contributes to its own paint and to the rope, or null.</summary>
+    public static Rgb? TintOf(ClipItem item)
+    {
+        if (item.IsSticky && !snapshot.TintStickyNotes) return null;
+        return CardTints.TintOf(SchemeId, (int)item.Kind, item.FileCategory, snapshot.FineGrainedFileTints);
+    }
+
+    /// <summary>
+    /// Colours for one card, or null when it must keep the classic theme colours.
+    /// 色值卡 / 图片卡 always return null; sticky notes return null unless the user opted in.
+    /// Rich colours carried by HTML / RTF are honoured but forced through a WCAG contrast check.
+    /// </summary>
+    public static CardPaintColors? CardPaint(ClipItem item)
+    {
+        if (TintOf(item) is not { } tint) return null;
+        var rich = item.IsRich ? CardTints.ExtractRichColors(item.Html, item.Rtf) : default;
+        var pal = CardTints.CardPalette(tint, rich.Foreground, rich.Background);
+        return new CardPaintColors(Wpf(pal.top), Wpf(pal.bottom), Wpf(pal.border), Wpf(pal.ink), Wpf(pal.dim));
+    }
+
     public static void Apply(Settings s)
     {
         snapshot = s;

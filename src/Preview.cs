@@ -28,7 +28,10 @@ static class Preview
             new() { Kind = ClipKind.Color, Text = "#3B82F6" },
             new() { Kind = ClipKind.Files, Files = new() { @"D:\media\发布会剪辑.mp4", @"D:\media\配乐.wav" },
                     FileCategory = FileCategories.Media },
-            new() { Kind = ClipKind.Text, Text = "Rich text keeps its formatting when pasted. 2026-11-06 ¥1,280.50", Html = "<b>x</b>",
+            // A deliberately low-contrast pasted colour (#FFE000 on a warm paper card) shows the
+            // WCAG correction: the card keeps the hue but darkens the ink to >= 4.5:1.
+            new() { Kind = ClipKind.Text, Text = "Rich text keeps its formatting when pasted. 2026-11-06 ¥1,280.50",
+                    Html = "<span style=\"color:#FFE000; background-color:#FFF8E1\">x</span>",
                     Tags = new() { SmartTags.Date, SmartTags.Amount } },
             new() { Kind = ClipKind.Sticky, Text = "11月6日前交周报\n下午三点设计评审\n记得买咖啡豆", NoteColor = "#FFF3B0", Time = DateTime.Now,
                     Tags = new() { SmartTags.Date } },

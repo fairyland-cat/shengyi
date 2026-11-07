@@ -48,6 +48,16 @@ sealed class Settings
     public int RopeSag { get; set; } = 4;                  // 0..48, the rope's dip in DIPs
     public int CardSizePercent { get; set; } = 100;        // 70..150
 
+    // 0.7.0 · colour cards by content type and splice the rope's gradient from the cards
+    // currently hanging in the viewport. Defaults keep an upgraded install looking exactly
+    // like 0.6.1 until the user picks a scheme. 色值卡 / 图片卡 are never tinted.
+    public string CardTintScheme { get; set; } = "off";    // "off" or one of CardTints.Schemes
+    public bool RopeGradient { get; set; } = true;         // only active when a scheme is on
+    public int RopeTintStrength { get; set; } = 70;        // 0..100
+    public bool RopeGradientBanded { get; set; }           // false = smooth, true = hard seams
+    public bool TintStickyNotes { get; set; }              // false = keep the user's paper colour
+    public bool FineGrainedFileTints { get; set; }         // false = one colour for all files
+
     // Frequency ordering: after a card is used this many times within the window, it joins the
     // "frequently used" group at the front. 0 switches the whole feature off.
     public int FreqThreshold { get; set; } = 3;           // 0..20

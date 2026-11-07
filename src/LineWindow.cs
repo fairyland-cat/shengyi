@@ -48,6 +48,10 @@ sealed class LineWindow : Window
     readonly Canvas shelf = new(), viewport = new(), strip = new();
     readonly TranslateTransform slide = new(), scroll = new();
     readonly Path rope;
+    // Reused brush + stop pool: scrolling only mutates offsets/colours, never allocates.
+    readonly LinearGradientBrush ropePaint = new() { MappingMode = BrushMappingMode.Absolute };
+    double lastGradientOffset = double.NaN;
+    bool gradientActive;
     readonly Border hint, searchBar, tabBar, helpBar;
     readonly TextBlock hintText = new() { Foreground = Brushes.White, FontSize = 12 };
     readonly StackPanel bar = new() { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed };
@@ -368,7 +372,7 @@ sealed class LineWindow : Window
     void UpdateChrome()
     {
         var p = Theme.P;
-        rope.Stroke = Theme.B(p.Rope);
+        UpdateRopeGradient(force: true);
         hint.Background = Theme.B(p.Hint);
         searchBar.Background = Theme.B(p.Panel);
         tabBar.Background = Theme.B(p.Panel);
@@ -381,6 +385,46 @@ sealed class LineWindow : Window
         ((TextBlock)gear.Child).Foreground = filterOpen ? Theme.B(Theme.P.TabOnInk) : Theme.B(p.PanelInk);
         filterPanel.Restyle();
         UpdateTabs();
+    }
+
+    // 0.7.0 · dye the rope only where cards hang in the current viewport.
+    // centres use the SAME coordinates as PlaceCards(): xs[i] + card width/2 - offset.
+    // 色值卡 / 图片卡 (and sticky notes with their own paper) contribute no colour, so bare
+    // stretches — including those between two cards — stay the plain hemp colour.
+    void UpdateRopeGradient(bool force = false)
+    {
+        double W = ActualWidth;
+        if (W <= 0) { rope.Stroke = Theme.B(Theme.P.Rope); return; }
+        if (!Theme.RopeGradientOn)
+        {
+            rope.Stroke = Theme.B(Theme.P.Rope);
+            gradientActive = false;
+            lastGradientOffset = double.NaN;
+            return;
+        }
+        if (!force && !double.IsNaN(lastGradientOffset) && Math.Abs(offset - lastGradientOffset) < 2) return;
+        lastGradientOffset = offset;
+
+        var cards = new List<(double center, Rgb color)>();
+        for (int i = 0; i < order.Count && i < xs.Length; i++)
+        {
+            double center = xs[i] + CardView.SizeOf(order[i]).Width / 2 - offset;
+            if (center < -60 || center > W + 60) continue;
+            if (Theme.TintOf(order[i]) is { } c) cards.Add((center, c));
+        }
+        var stops = CardTints.RopeStops(cards, W, Theme.RopeBase, Theme.RopeStrength, Theme.RopeBanded);
+        ropePaint.StartPoint = new Point(0, 0);
+        ropePaint.EndPoint = new Point(W, 0);
+        while (ropePaint.GradientStops.Count < stops.Length)
+            ropePaint.GradientStops.Add(new GradientStop());
+        for (int i = 0; i < stops.Length; i++)
+        {
+            ropePaint.GradientStops[i].Offset = stops[i].Offset;
+            ropePaint.GradientStops[i].Color = Theme.Wpf(stops[i].Color);
+        }
+        while (ropePaint.GradientStops.Count > stops.Length)
+            ropePaint.GradientStops.RemoveAt(ropePaint.GradientStops.Count - 1);
+        if (!gradientActive) { rope.Stroke = ropePaint; gradientActive = true; }
     }
 
     // Opening the drawer makes the strip taller; the window, the hover zone and the viewport
@@ -532,6 +576,7 @@ sealed class LineWindow : Window
             if (views.TryGetValue(order[i], out var v)) Move(v, xs[i], animate);
         Realize();
         PlaceCards();
+        UpdateRopeGradient(force: true);
 
         hint.Visibility = order.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         if (order.Count == 0)
@@ -700,6 +745,7 @@ sealed class LineWindow : Window
             scroll.X = -offset;
             Realize();
             PlaceCards();
+            UpdateRopeGradient();
         }
         foreach (var v in views.Values) v.Step(dt, rng);
     }

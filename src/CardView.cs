@@ -36,6 +36,7 @@ sealed class CardView : Grid
     readonly DispatcherTimer holdTimer = new() { Interval = TimeSpan.FromMilliseconds(550) };
     static readonly SolidColorBrush HighlightBrush = MakeHighlightBrush();
     TextBlock? bodyText;
+    Color? tintedBottom; // set by Dress(); the sticky pin follows its card when tinted
     string bodyFull = "", highlight = "";
     Point downAt;
     bool pressed, hover, selected, checkedOn;
@@ -180,7 +181,7 @@ sealed class CardView : Grid
             peg.Width = 12;
             peg.Height = 12;
             peg.CornerRadius = new CornerRadius(6);
-            peg.Background = Theme.B(Theme.Mix(Theme.NoteBase(item.NoteColor), Colors.Black, 0.32));
+            peg.Background = Theme.B(Theme.Mix(tintedBottom ?? Theme.NoteBase(item.NoteColor), Colors.Black, 0.32));
             peg.Child = null;
         }
 
@@ -466,11 +467,43 @@ sealed class CardView : Grid
     UIElement Dress(ClipItem item)
     {
         var p = Theme.P;
+        var paint = Theme.CardPaint(item);
+        bool tinted = paint is not null;
+        tintedBottom = paint?.Bottom;
+
+        // Classic colours per card kind. A tint scheme replaces all five at once; 色值卡 and
+        // 图片卡 never get a paint, so they (and their real content) stay exactly as before.
+        Color bgTop, bgBottom, border, ink, dim;
+        switch (item.Kind)
+        {
+            case ClipKind.Code:
+                bgTop = bgBottom = p.CodeA; border = p.CodeBorder; ink = p.CodeInk; dim = p.CodeDim; break;
+            case ClipKind.Link:
+                bgTop = bgBottom = p.CardA; border = p.CardBorder; ink = p.LinkInk; dim = p.CardDim; break;
+            case ClipKind.Files:
+                bgTop = p.CardA; bgBottom = p.CardB; border = p.CardBorder; ink = p.CardInk; dim = p.CardDim; break;
+            case ClipKind.Text:
+                bgTop = p.PaperA; bgBottom = p.PaperB; border = p.PaperBorder; ink = p.PaperInk; dim = p.PaperDim; break;
+            default:
+                bgTop = bgBottom = p.CardA; border = p.CardBorder; ink = p.CardInk; dim = p.CardDim; break;
+        }
+        if (paint is { } q)
+        {
+            bgTop = q.Top; bgBottom = q.Bottom; border = q.Border; ink = q.Ink; dim = q.Dim;
+        }
+        frame.BorderBrush = Theme.B(border);
+        // Tinted cards always use a gentle top→bottom gradient; untinted ones keep their
+        // original solid / gradient choice so "off" is pixel-identical to 0.6.1.
+        Brush CardBg(bool classicVertical) =>
+            tinted || classicVertical ? Theme.Vertical(bgTop, bgBottom) : Theme.B(bgTop);
+        Color iconBg = tinted ? Theme.Mix(bgBottom, Colors.White, 0.35) : p.LinkIconBg;
+        Color tileBg = tinted ? Theme.Mix(bgTop, Colors.White, 0.45) : p.Tile;
+
         switch (item.Kind)
         {
             case ClipKind.Image:
             {
-                frame.Background = Theme.B(p.CardA);
+                frame.Background = CardBg(false);
                 frame.Padding = new Thickness(4);
                 var g = new Grid { Background = Theme.B(p.CodeB) };
                 g.Children.Add(new Image { Source = Thumbs.LoadFull(item.ImagePath!, 200), Stretch = Stretch.UniformToFill });
@@ -478,22 +511,21 @@ sealed class CardView : Grid
             }
             case ClipKind.Code:
             {
-                frame.Background = Theme.B(p.CodeA);
-                frame.BorderBrush = Theme.B(p.CodeBorder);
+                frame.Background = CardBg(false);
                 frame.Padding = new Thickness(10, 8, 10, 6);
                 var lines = (item.Text ?? "").Replace("\r\n", "\n").Split('\n');
                 var preview = string.Join("\n", lines.SkipWhile(l => l.Trim().Length == 0).Take(8)).Replace("\t", "    ");
                 var dots = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
                 foreach (var c in new[] { Color.FromRgb(0xF8, 0x71, 0x71), Color.FromRgb(0xFB, 0xBF, 0x24), Color.FromRgb(0x34, 0xD3, 0x99) })
                     dots.Children.Add(new Border { Width = 6, Height = 6, CornerRadius = new CornerRadius(3), Background = new SolidColorBrush(c), Margin = new Thickness(0, 0, 4, 0) });
-                var code = Note(preview, string.Format(S.Lines, lines.Length), Theme.B(p.CodeInk), Theme.B(p.CodeDim),
+                var code = Note(preview, string.Format(S.Lines, lines.Length), Theme.B(ink), Theme.B(dim),
                     wrap: false, mono: true, rich: false, header: dots);
                 CaptureBody(code, preview);
                 return code;
             }
             case ClipKind.Link:
             {
-                frame.Background = Theme.B(p.CardA);
+                frame.Background = CardBg(false);
                 frame.Padding = new Thickness(10, 9, 10, 8);
                 bool mail = item.Text!.Trim().StartsWith("mailto:", StringComparison.OrdinalIgnoreCase);
                 var (domain, rest) = SplitLink(item.Text!.Trim());
@@ -503,7 +535,7 @@ sealed class CardView : Grid
                     Width = 20,
                     Height = 20,
                     CornerRadius = new CornerRadius(10),
-                    Background = Theme.B(p.LinkIconBg),
+                    Background = Theme.B(iconBg),
                     Margin = new Thickness(0, 0, 7, 0),
                     Child = new TextBlock
                     {
@@ -520,26 +552,27 @@ sealed class CardView : Grid
                 head.Children.Add(new TextBlock
                 {
                     Text = domain, FontSize = 13, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center,
-                    TextTrimming = TextTrimming.CharacterEllipsis, Foreground = Theme.B(p.LinkInk),
+                    TextTrimming = TextTrimming.CharacterEllipsis, Foreground = Theme.B(ink),
                 });
                 var stack = new StackPanel();
                 stack.Children.Add(head);
                 stack.Children.Add(new TextBlock
                 {
                     Text = rest, FontSize = 11, Margin = new Thickness(0, 5, 0, 0), MaxHeight = 30,
-                    TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis, Foreground = Theme.B(p.CardDim),
+                    TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis, Foreground = Theme.B(dim),
                 });
                 return stack;
             }
             case ClipKind.Color:
             {
-                frame.Background = Theme.B(p.CardA);
+                // 色值卡不染色：外框跟随主题，内部是复制到的真实颜色。
+                frame.Background = CardBg(false);
                 frame.Padding = new Thickness(5);
                 var dock = new DockPanel();
                 var label = new TextBlock
                 {
                     Text = item.Text!.Trim(), FontFamily = new FontFamily("Consolas"), FontSize = 10, Margin = new Thickness(0, 4, 0, 1),
-                    HorizontalAlignment = HorizontalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Foreground = Theme.B(p.CardDim),
+                    HorizontalAlignment = HorizontalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Foreground = Theme.B(dim),
                 };
                 DockPanel.SetDock(label, Dock.Bottom);
                 dock.Children.Add(label);
@@ -555,7 +588,7 @@ sealed class CardView : Grid
             }
             case ClipKind.Files:
             {
-                frame.Background = Theme.Vertical(p.CardA, p.CardB);
+                frame.Background = CardBg(true);
                 frame.Padding = new Thickness(9, 8, 10, 8);
                 var files = item.Files ?? new();
                 var first = files.FirstOrDefault() ?? "";
@@ -564,15 +597,15 @@ sealed class CardView : Grid
                     : new TextBlock
                     {
                         Text = Directory.Exists(first) ? "" : "", FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 18,
-                        Foreground = Theme.B(p.CardDim), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+                        Foreground = Theme.B(dim), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
                     };
                 var tile = new Border
                 {
                     Width = 40,
                     Height = 40,
                     CornerRadius = new CornerRadius(9),
-                    Background = Theme.B(p.Tile),
-                    BorderBrush = Theme.B(p.CardBorder),
+                    Background = Theme.B(tileBg),
+                    BorderBrush = Theme.B(border),
                     BorderThickness = new Thickness(1),
                     Margin = new Thickness(0, 0, 9, 0),
                     Child = icon,
@@ -584,12 +617,12 @@ sealed class CardView : Grid
                 stack.Children.Add(new TextBlock
                 {
                     Text = Path.GetFileName(first.TrimEnd('\\')), FontSize = 12, FontWeight = FontWeights.SemiBold,
-                    TextTrimming = TextTrimming.CharacterEllipsis, Foreground = Theme.B(p.CardInk),
+                    TextTrimming = TextTrimming.CharacterEllipsis, Foreground = Theme.B(ink),
                 });
                 stack.Children.Add(new TextBlock
                 {
                     Text = files.Count > 1 ? string.Format(S.MoreFiles, files.Count - 1) : Path.GetFileName(Path.GetDirectoryName(first.TrimEnd('\\')) ?? ""),
-                    FontSize = 10.5, Margin = new Thickness(0, 2, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis, Foreground = Theme.B(p.CardDim),
+                    FontSize = 10.5, Margin = new Thickness(0, 2, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis, Foreground = Theme.B(dim),
                 });
                 dock.Children.Add(stack);
                 return dock;
@@ -597,8 +630,10 @@ sealed class CardView : Grid
             case ClipKind.Sticky:
             {
                 var n = Theme.NotePalette(item.NoteColor);
-                frame.Background = Theme.Vertical(n.top, n.bottom);
-                frame.BorderBrush = Theme.B(n.border);
+                Color nInk = tinted ? ink : n.ink;
+                Color nDim = tinted ? dim : n.dim;
+                frame.Background = tinted ? CardBg(true) : Theme.Vertical(n.top, n.bottom);
+                frame.BorderBrush = Theme.B(tinted ? border : n.border);
                 frame.CornerRadius = new CornerRadius(4);
                 frame.Padding = new Thickness(11, 8, 11, 7);
                 var text = (item.Text ?? "").Trim().Replace("\r\n", "\n").Replace('\t', ' ');
@@ -608,16 +643,16 @@ sealed class CardView : Grid
                 var tag = new Border
                 {
                     CornerRadius = new CornerRadius(4),
-                    Background = Theme.B(Theme.WithAlpha(n.ink, 0x20)),
+                    Background = Theme.B(Theme.WithAlpha(nInk, 0x20)),
                     Padding = new Thickness(5, 1, 5, 1),
-                    Child = new TextBlock { Text = S.StickyTag, FontSize = 9, FontWeight = FontWeights.SemiBold, Foreground = Theme.B(n.dim) },
+                    Child = new TextBlock { Text = S.StickyTag, FontSize = 9, FontWeight = FontWeights.SemiBold, Foreground = Theme.B(nDim) },
                 };
                 DockPanel.SetDock(tag, Dock.Left);
                 head.Children.Add(tag);
                 head.Children.Add(new TextBlock
                 {
                     Text = item.Time.ToString("MM/dd"), FontSize = 9.5,
-                    Foreground = Theme.B(n.dim), HorizontalAlignment = HorizontalAlignment.Right,
+                    Foreground = Theme.B(nDim), HorizontalAlignment = HorizontalAlignment.Right,
                     VerticalAlignment = VerticalAlignment.Center,
                 });
                 var dock = new DockPanel();
@@ -628,7 +663,7 @@ sealed class CardView : Grid
                     Text = text.Length == 0 ? S.StickyEmpty : text,
                     FontSize = 12, LineHeight = 16.5,
                     TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis,
-                    Foreground = Theme.B(n.ink),
+                    Foreground = Theme.B(nInk),
                     Opacity = text.Length == 0 ? 0.65 : 1,
                 };
                 bodyFull = noteBody.Text;
@@ -639,7 +674,7 @@ sealed class CardView : Grid
                 grid.Children.Add(new System.Windows.Shapes.Path // folded bottom-right corner
                 {
                     Data = Geometry.Parse("M 0,14 L 14,0 L 14,14 Z"),
-                    Fill = Theme.B(Theme.WithAlpha(n.ink, 0x20)),
+                    Fill = Theme.B(Theme.WithAlpha(nInk, 0x20)),
                     Width = 14, Height = 14,
                     HorizontalAlignment = HorizontalAlignment.Right,
                     VerticalAlignment = VerticalAlignment.Bottom,
@@ -649,12 +684,11 @@ sealed class CardView : Grid
             }
             default:
             {
-                frame.Background = Theme.Vertical(p.PaperA, p.PaperB);
-                frame.BorderBrush = Theme.B(p.PaperBorder);
+                frame.Background = CardBg(true);
                 frame.Padding = new Thickness(11, 9, 11, 6);
                 var text = (item.Text ?? "").Trim().Replace("\r\n", "\n").Replace('\t', ' ');
                 if (text.Length > 300) text = text[..300];
-                var paper = Note(text, string.Format(S.Chars, (item.Text ?? "").Length), Theme.B(p.PaperInk), Theme.B(p.PaperDim),
+                var paper = Note(text, string.Format(S.Chars, (item.Text ?? "").Length), Theme.B(ink), Theme.B(dim),
                     wrap: true, mono: false, rich: item.IsRich, header: null);
                 CaptureBody(paper, text);
                 return paper;

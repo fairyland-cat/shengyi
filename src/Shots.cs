@@ -24,7 +24,8 @@ static class Shots
         Directory.CreateDirectory(folder);
         ClipStore.Root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "shengyi-shots");
         if (Directory.Exists(ClipStore.Root)) Directory.Delete(ClipStore.Root, true);
-        var settings = new Settings();
+        // README shots show the recommended 0.7.0 palette so the docs match the feature.
+        var settings = new Settings { CardTintScheme = "paper-dawn" };
         Theme.Apply(settings); // screenshots should follow the same palette as the live app
         var store = new ClipStore(() => settings);
         Seed(store);
@@ -74,13 +75,36 @@ static class Shots
             Save(Scene(Snapshot((FrameworkElement)tagLine.Content), tagLine.Height, desktop: false), System.IO.Path.Combine(folder, "tags.png"));
             Save(Scene(Snapshot((FrameworkElement)mergeLine.Content), mergeLine.Height, desktop: false), System.IO.Path.Combine(folder, "merge.png"));
             Save((FrameworkElement)prefs.Content, System.IO.Path.Combine(folder, "settings.png"));
+            // A second frame with the scroll viewer at the bottom shows the new 0.7.0 panel.
+            var scroller = FindChild<ScrollViewer>((FrameworkElement)prefs.Content);
+            if (scroller != null)
+            {
+                scroller.ScrollToEnd();
+                scroller.UpdateLayout();
+                Save((FrameworkElement)prefs.Content, System.IO.Path.Combine(folder, "settings-tints.png"));
+            }
             line.Close();
             searchLine.Close();
             tagLine.Close();
             mergeLine.Close();
             prefs.Close();
-            store.Dispose();
-            Preview.Render(System.IO.Path.Combine(folder, "cards.png"), done);
+
+            // Second scene: a vivid scheme at full rope strength, documenting the spliced
+            // gradient. Theme is a process-wide singleton, so this runs after the shots above.
+            var vivid = new Settings { CardTintScheme = "macaron", RopeTintStrength = 90 };
+            Theme.Apply(vivid);
+            var tintLine = new LineWindow(Forms.Screen.PrimaryScreen!, store, actions, () => vivid);
+            windows.Add(tintLine);
+            tintLine.Reveal(keyboard: false);
+            After(1200, () =>
+            {
+                Save(Scene(Snapshot((FrameworkElement)tintLine.Content), tintLine.Height),
+                    System.IO.Path.Combine(folder, "tints.png"));
+                tintLine.Close();
+                Theme.Apply(settings); // cards.png matches the main line.png palette
+                store.Dispose();
+                Preview.Render(System.IO.Path.Combine(folder, "cards.png"), done);
+            });
         });
     }
 
@@ -181,6 +205,18 @@ static class Shots
         root.Measure(new Size(SceneWidth, SceneHeight));
         root.Arrange(new Rect(0, 0, SceneWidth, SceneHeight));
         return root;
+    }
+
+    static T? FindChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        int n = VisualTreeHelper.GetChildrenCount(parent);
+        for (int i = 0; i < n; i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T match) return match;
+            if (FindChild<T>(child) is { } deeper) return deeper;
+        }
+        return null;
     }
 
     static BitmapSource Snapshot(FrameworkElement e)

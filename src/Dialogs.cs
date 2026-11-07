@@ -281,7 +281,55 @@ sealed class SettingsWindow : ChromeWindow
 
         // ---- Appearance ----------------------------------------------------
         var preview = new AppearancePreview { HorizontalAlignment = HorizontalAlignment.Stretch };
-        void Refresh() => preview.Update(Result);
+        var tintStrip = new StackPanel { Orientation = Orientation.Horizontal };
+        void Refresh()
+        {
+            preview.Update(Result);
+            var scheme = CardTints.Find(Result.CardTintScheme);
+            tintStrip.Children.Clear();
+            for (int i = 0; i < CardTints.KindCount; i++)
+            {
+                var raw = scheme?.Colors[i];
+                var shown = raw is { } tint
+                    ? CardTints.CardPalette(tint).bottom
+                    : Theme.RgbOf(Theme.P.Surface);
+                tintStrip.Children.Add(new Border
+                {
+                    Width = 24, Height = 24, CornerRadius = new CornerRadius(7),
+                    Margin = new Thickness(0, 0, 7, 0),
+                    Background = Theme.B(Theme.Wpf(shown)),
+                    BorderBrush = Theme.B(Theme.Line), BorderThickness = new Thickness(1),
+                    ToolTip = S.TintKindNames[i],
+                });
+            }
+        }
+
+        // ---- Content tints (0.7.0) -----------------------------------------
+        var schemeIds = new[] { CardTints.Off }.Concat(CardTints.Schemes.Select(s => s.Id)).ToArray();
+        var schemeLabels = new[] { S.TintSchemeOff }.Concat(CardTints.Schemes.Select(s => s.Zh)).ToArray();
+        var schemeBox = new ComboBox
+        {
+            Width = 210, FontSize = 12.5, ItemsSource = schemeLabels,
+            Foreground = Theme.B(Theme.Ink), Background = Theme.B(Theme.P.Surface),
+            BorderBrush = Theme.B(Theme.Line), BorderThickness = new Thickness(1),
+            Padding = new Thickness(7, 5, 7, 5), HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        schemeBox.SelectedIndex = Math.Max(0, Array.IndexOf(schemeIds, Result.CardTintScheme));
+        schemeBox.SelectionChanged += (_, _) =>
+        {
+            Result.CardTintScheme = schemeIds[Math.Clamp(schemeBox.SelectedIndex, 0, schemeIds.Length - 1)];
+            Refresh();
+        };
+        var ropeOn = new Toggle(Result.RopeGradient);
+        ropeOn.Changed += () => { Result.RopeGradient = ropeOn.IsOn; Refresh(); };
+        var bandMode = new Segmented(Result.RopeGradientBanded ? 1 : 0, S.TintModeSmooth, S.TintModeBanded);
+        bandMode.Changed += () => { Result.RopeGradientBanded = bandMode.Selected == 1; Refresh(); };
+        var strength = Fields.Stepper(Math.Clamp(Result.RopeTintStrength, 0, 100), 0, 100, 10,
+            v => { Result.RopeTintStrength = v; Refresh(); }, "%");
+        var stickyOn = new Toggle(Result.TintStickyNotes);
+        stickyOn.Changed += () => { Result.TintStickyNotes = stickyOn.IsOn; Refresh(); };
+        var fineOn = new Toggle(Result.FineGrainedFileTints);
+        fineOn.Changed += () => { Result.FineGrainedFileTints = fineOn.IsOn; Refresh(); };
 
         int themeIndex = Math.Max(0, Array.IndexOf(Theme.Names, Result.ThemeName));
         var themePicker = new Segmented(themeIndex, S.ThemeNames);
@@ -345,6 +393,14 @@ sealed class SettingsWindow : ChromeWindow
             Stacked(S.AccentTitle, S.AccentNote, accentSwatches),
             Stacked(S.CardColorTitle, S.CardColorNote, cardSwatches),
             Row(S.CardColorCustom, null, hexField))));
+        left.Children.Add(Spaced(Card(S.SectionTints,
+            Stacked(S.TintSchemeTitle, S.TintSchemeNote, schemeBox),
+            Stacked(S.TintStripTitle, S.TintStripNote, tintStrip),
+            Row(S.TintRopeTitle, S.TintRopeNote, ropeOn),
+            Row(S.TintModeTitle, null, bandMode),
+            Row(S.TintStrengthTitle, S.TintStrengthNote, strength),
+            Row(S.TintStickyTitle, S.TintStickyNote, stickyOn),
+            Row(S.TintFineTitle, S.TintFineNote, fineOn))));
 
         var right = new StackPanel();
         right.Children.Add(Card(S.SectionSearch,

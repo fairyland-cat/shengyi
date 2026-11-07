@@ -147,6 +147,29 @@ static class S
         T("Follow theme", "跟随主题"), T("Warm yellow", "暖黄"), T("Paper", "纸白"), T("Sky", "天蓝"),
         T("Mint", "薄荷"), T("Blush", "浅粉"), T("Graphite", "深灰"), T("Pure white", "纯白"),
     };
+    // 0.7.0 · content-tinted cards + spliced rope
+    public static string SectionTints => T("Content colours", "按类型配色");
+    public static string TintSchemeTitle => T("Card palette", "卡片配色方案");
+    public static string TintSchemeNote => T("Colour cards by content type; colour chips and photos keep the theme", "按内容类型给卡片上色；色值卡与图片卡保持主题原色");
+    public static string TintSchemeOff => T("Off (classic look)", "关闭（保持旧配色）");
+    public static string TintRopeTitle => T("Rope gradient", "绳子拼接渐变");
+    public static string TintRopeNote => T("Dye only the stretches where cards hang; bare rope stays hemp-coloured", "只染挂着卡片的绳段，空绳段保持麻绳本色");
+    public static string TintModeTitle => T("Gradient style", "渐变方式");
+    public static string TintModeSmooth => T("Smooth", "平滑过渡");
+    public static string TintModeBanded => T("Banded", "硬边拼接");
+    public static string TintStrengthTitle => T("Tint strength", "染色强度");
+    public static string TintStrengthNote => T("How much of the card colour reaches the rope", "卡片颜色渗到绳子上的比例");
+    public static string TintStickyTitle => T("Tint sticky notes", "便签也按类型着色");
+    public static string TintStickyNote => T("Otherwise notes keep the paper colour you picked", "关闭时便签保留你选的纸色");
+    public static string TintFineTitle => T("Split file colours", "文件按类别细分");
+    public static string TintFineNote => T("Give each file category its own tint", "音视频、压缩包、文档等各用一种颜色");
+    public static string TintStripTitle => T("Palette preview", "当前色板");
+    public static string TintStripNote => T("Text / link / code / file / note · pasted colours are kept readable", "文字 / 链接 / 代码 / 文件 / 便签 · 粘贴内容自带颜色会自动校正对比度");
+    public static string[] TintKindNames => new[]
+    {
+        T("Text", "文字"), T("Link", "链接"), T("Code", "代码"), T("File", "文件"), T("Note", "便签"),
+    };
+
     public static string SectionGeometry => T("Line & cards", "绳子与卡片");
     public static string RopeSagTitle => T("Rope sag", "绳子弧度");
     public static string RopeSagNote => T("How far the rope dips in the middle; cards follow it", "绳子中部的下垂量，卡片会跟着弧线");

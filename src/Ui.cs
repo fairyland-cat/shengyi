@@ -371,32 +371,66 @@ sealed class AppearancePreview : Border
         var fig = new PathFigure { StartPoint = new Point(0, lineTop) };
         fig.Segments.Add(new QuadraticBezierSegment(new Point(W / 2, lineTop + 2 * sag), new Point(W, lineTop), true));
         rope.Data = new PathGeometry(new[] { fig });
-        rope.Stroke = Theme.B(p.Rope);
+
+        var scheme = CardTints.Find(s.CardTintScheme);
+        var ropeRgb = scheme?.Rope ?? Theme.RgbOf(p.Rope);
+        rope.Stroke = Theme.B(Theme.Wpf(ropeRgb));
 
         const double margin = 20;
         double pitch = Math.Max(1, (W - 2 * margin) / 3);
+        // The miniature hangs Text / Link / Code cards, matching the first three tint slots.
+        int[] kinds = { (int)TintKind.Text, (int)TintKind.Link, (int)TintKind.Code };
+        var centres = new (double center, Rgb color)[3];
+        var paints = new (Rgb top, Rgb bottom, Rgb border, Rgb ink, Rgb dim)?[3];
         for (int i = 0; i < 3; i++)
         {
             double w = Math.Min(Math.Max(24, pitch - 12), 76 * k), h = 48 * k;
             double x = margin + i * pitch + (pitch - w) / 2;
             double t = Math.Clamp((x + w / 2) / W, 0, 1);
             double y = lineTop + 4 * sag * t * (1 - t) + 8;
+            if (CardTints.TintOf(s.CardTintScheme, kinds[i]) is { } tint)
+            {
+                paints[i] = CardTints.CardPalette(tint);
+                centres[i] = (x + w / 2, tint);
+            }
+            else centres[i] = (x + w / 2, ropeRgb);
+
             var card = cards[i];
             card.Width = w;
             card.Height = h;
-            card.Background = i switch
-            {
-                0 => Theme.Vertical(p.PaperA, p.PaperB),
-                1 => Theme.B(p.CardA),
-                _ => Theme.B(p.CodeA),
-            };
-            card.BorderBrush = Theme.B(i == 0 ? p.PaperBorder : p.CardBorder);
+            var q = paints[i];
+            card.Background = q is { } paint
+                ? Theme.Vertical(Theme.Wpf(paint.top), Theme.Wpf(paint.bottom))
+                : i switch
+                {
+                    0 => Theme.Vertical(p.PaperA, p.PaperB),
+                    1 => Theme.B(p.CardA),
+                    _ => Theme.B(p.CodeA),
+                };
+            card.BorderBrush = Theme.B(q is { } pb
+                ? Theme.Wpf(pb.border)
+                : i == 0 ? p.PaperBorder : p.CardBorder);
             Canvas.SetLeft(card, x);
             Canvas.SetTop(card, y);
             var peg = pegs[i];
             peg.Background = Theme.Peg(p.PegA, p.PegB, p.PegC);
             Canvas.SetLeft(peg, x + w / 2 - 3);
             Canvas.SetTop(peg, y - 7);
+        }
+
+        if (scheme != null && s.RopeGradient)
+        {
+            var stops = CardTints.RopeStops(centres, W, ropeRgb,
+                Math.Clamp(s.RopeTintStrength, 0, 100) / 100.0, s.RopeGradientBanded);
+            var brush = new LinearGradientBrush
+            {
+                MappingMode = BrushMappingMode.Absolute,
+                StartPoint = new Point(0, 0),
+                EndPoint = new Point(W, 0),
+            };
+            foreach (var stop in stops)
+                brush.GradientStops.Add(new GradientStop(Theme.Wpf(stop.Color), stop.Offset));
+            rope.Stroke = brush;
         }
     }
 }
