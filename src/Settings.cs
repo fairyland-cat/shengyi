@@ -61,16 +61,29 @@ sealed class Settings
     // Frequency ordering: after a card is used this many times within the window, it joins the
     // "frequently used" group at the front. 0 switches the whole feature off.
     public int FreqThreshold { get; set; } = 3;           // 0..20
-    public int FreqWindowDays { get; set; } = 7;          // 1..90, the rolling window
+    // 0.8.0: minutes, 1..129600 (90 days). The old key "FreqWindowDays" is migrated on load.
+    public int FreqWindowMinutes { get; set; } = FreqWindow.DefaultMinutes;
 
     // Paper colour used when a new sticky note is created. "auto" follows the active theme.
     public string NoteColor { get; set; } = "auto";
 
     public static Settings Load()
     {
-        try { return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? new(); }
+        try
+        {
+            var json = File.ReadAllText(FilePath);
+            var s = JsonSerializer.Deserialize<Settings>(json) ?? new();
+            s.MigrateLegacyWindow(json);
+            return s;
+        }
         catch { return new(); }
     }
+
+    // 0.7.1 and earlier stored "FreqWindowDays": 1..90, default 7. Convert it to minutes so
+    // an upgrade keeps the same effective window instead of silently shrinking 7 days to
+    // 7 minutes. A file that already has the new key (or neither key) is left alone.
+    void MigrateLegacyWindow(string json) =>
+        FreqWindowMinutes = FreqWindow.FromLegacyJson(json, FreqWindowMinutes);
 
     public void Save()
     {

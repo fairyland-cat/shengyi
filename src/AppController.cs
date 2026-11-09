@@ -24,6 +24,8 @@ sealed class AppController : IDisposable
     Forms.NotifyIcon tray = null!;
     Forms.ToolStripMenuItem toggleItem = null!, pauseItem = null!, resumeItem = null!;
     bool settingsOpen;
+    bool noteHotkeyFailed;
+    AuxHotkeyResult auxResult = new(true, true);
 
     public AppController(Application app) => this.app = app;
 
@@ -51,8 +53,8 @@ sealed class AppController : IDisposable
         BuildTray();
         actions.Notify = msg => tray.ShowBalloonTip(3000, S.AppName, msg, Forms.ToolTipIcon.Info);
         ApplyAuxHotkeys();
-        if (!messages.SetHotkey(settings.HotkeyModifiers, settings.HotkeyKey))
-            tray.ShowBalloonTip(5000, S.AppName, string.Format(S.HotkeyFailed, CurrentHotkey), Forms.ToolTipIcon.Warning);
+        bool mainOk = messages.SetHotkey(settings.HotkeyModifiers, settings.HotkeyKey);
+        ReportHotkeyFailures(mainOk, false);
         if (!settings.ClipboardWelcomeShown)
         {
             settings.ClipboardWelcomeShown = true;
@@ -68,10 +70,29 @@ sealed class AppController : IDisposable
     // toggling a setting off really releases the key instead of leaving a stale binding.
     void ApplyAuxHotkeys()
     {
-        bool ok = messages.SetAuxHotkeys(
+        auxResult = messages.SetAuxHotkeys(
             settings.SequenceHotkeyEnabled, settings.SequenceModifiers, settings.SequenceKey,
             settings.QuickInsertEnabled, settings.QuickInsertModifiers, settings.QuickInsertKey);
-        if (!ok) tray.ShowBalloonTip(5000, S.AppName, S.AuxHotkeyFailed, Forms.ToolTipIcon.Warning);
+    }
+
+    // A tray balloon is easily swallowed by the notification centre, and the old one did
+    // not even say WHICH chord was dead. Name every failed shortcut and show a modal box;
+    // at startup defer it so Start() can finish registering the remaining hotkeys first.
+    void ReportHotkeyFailures(bool mainOk, bool interactive)
+    {
+        string[] failed = HotkeyCheck.FailedChords(
+            mainOk, string.Format(S.HotkeyFailedMain, CurrentHotkey),
+            !noteHotkeyFailed, string.Format(S.HotkeyFailedNote, HotkeyText.Describe(0x3, 0x4E)),
+            settings.SequenceHotkeyEnabled, auxResult.NextOk,
+                string.Format(S.HotkeyFailedNext, HotkeyText.Describe(settings.SequenceModifiers, settings.SequenceKey)),
+            settings.QuickInsertEnabled, auxResult.InsertOk,
+                string.Format(S.HotkeyFailedInsert, HotkeyText.Describe(settings.QuickInsertModifiers, settings.QuickInsertKey)));
+        if (failed.Length == 0) return;
+        string msg = string.Format(S.HotkeyFailedDetail, string.Join("\n", failed));
+        tray.ShowBalloonTip(8000, S.AppName, msg, Forms.ToolTipIcon.Warning);
+        Action show = () => MessageBox.Show(msg, S.AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+        if (interactive) show();
+        else app.Dispatcher.BeginInvoke(show);
     }
 
     // Esc only cancels a running paste sequence, and the low-level hook is installed on demand
@@ -110,6 +131,7 @@ sealed class AppController : IDisposable
         menu.Items.Add(toggleItem);
         var noteItem = new Forms.ToolStripMenuItem(S.NewSticky, null, (_, _) => actions.NewSticky());
         if (messages.SetNoteHotkey()) noteItem.ShortcutKeyDisplayString = HotkeyText.Describe(0x3, 0x4E);
+        else noteHotkeyFailed = true;
         menu.Items.Add(noteItem);
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(pauseItem);
@@ -154,7 +176,8 @@ sealed class AppController : IDisposable
         settingsOpen = true;
         reveal.RetractAll();
         var w = new SettingsWindow(settings, Autostart.Enabled, messages.ClearHotkey,
-            () => messages.SetHotkey(settings.HotkeyModifiers, settings.HotkeyKey));
+            () => messages.SetHotkey(settings.HotkeyModifiers, settings.HotkeyKey),
+            messages.ProbeChord);
         bool ok = w.ShowDialog() == true;
         settingsOpen = false;
         if (!ok) return;
@@ -173,6 +196,7 @@ sealed class AppController : IDisposable
         store.RefreshTags();   // re-recognise history when 智能标签 was toggled
         Theme.Apply(settings); // repaints every line window and rebuilds its cards
         ApplyAuxHotkeys();     // pick up the two optional paste-mode chords
+        ReportHotkeyFailures(true, true); // main chord's failure was handled above + rolled back
         SyncHook();            // Win+V / Esc hook follows the saved settings and any live sequence
         try { Autostart.Enabled = w.StartWithWindows; }
         catch (Exception e) when (e is UnauthorizedAccessException or System.Security.SecurityException) { }

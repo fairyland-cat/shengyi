@@ -186,10 +186,22 @@ static class S
     public static string FreqThresholdTitle => T("Rank after this many uses", "取用几次后提前");
     public static string FreqThresholdNote => T("0 turns it off. Cards that reach it move to the front, most used first.", "设为 0 关闭；达到次数的卡片自动前移，次数多的排更前");
     public static string FreqWindowTitle => T("Count uses within", "统计时间窗口");
-    public static string FreqWindowNote => T("Only takes in the last N days count; older ones are ignored.", "只统计最近 N 天内的取用，更早的不计入");
-    public static string DaysUnit => T(" d", " 天");
+    public static string FreqWindowNote => T("Only takes in the last N minutes; older ones are ignored. Type 1–129600 (up to 90 days), or use −/+ to step by magnitude.",
+                                             "只统计最近 N 分钟内的取用，更早的不计入；可直接输入 1–129600 分钟（最长 90 天），或用 −/+ 按量级增减");
+    public static string MinutesUnit => T(" min", " 分钟");
     public static string UsageNone => T("Not used yet", "尚未取用");
-    public static string UsageTip => T("Used {1} times in the last {0} days · {2} total", "近 {0} 天取用 {1} 次 · 累计 {2} 次");
+    // {0} is a human-readable window label (see WindowLabel), not a bare number.
+    public static string UsageTip => T("Used {1} times in the last {0} · {2} total", "近 {0} 取用 {1} 次 · 累计 {2} 次");
+
+    // Minutes are the stored unit, but a 10080-minute window reads better as "7 天".
+    public static string WindowLabel(int minutes)
+    {
+        if (minutes >= 1440 && minutes % 1440 == 0)
+            return string.Format(T("{0} days", "{0} 天"), minutes / 1440);
+        if (minutes >= 60 && minutes % 60 == 0)
+            return string.Format(T("{0} hours", "{0} 小时"), minutes / 60);
+        return string.Format(T("{0} min", "{0} 分钟"), minutes);
+    }
     public static string ResetUsage => T("Reset usage statistics…", "重置使用统计…");
     public static string ResetUsageConfirm => T("Clear usage counts for {0} cards? Your clips are kept.", "清除 {0} 张卡片的取用统计？剪贴板内容会保留。");
 
@@ -241,8 +253,9 @@ static class S
     public static string QuickInsertChordTitle => T("Insert chord", "插入组合键");
     public static string QuickInsertCopyTitle => T("Copy instead of typing", "改为仅复制");
     public static string QuickInsertCopyNote => T("Use when Unicode typing is unreliable (terminals, remote desktops).", "终端 / 远程桌面里字符注入不可靠时改用这一项。");
-    public static string SequenceHotkeyTitle => T("Paste sequence shortcut", "逐条粘贴快捷键");
-    public static string SequenceHotkeyNote => T("One press advances to the next clip in a manual sequence. Off by default.", "每按一次粘贴队列里的下一条。默认关闭。");
+    public static string SequenceHotkeyTitle => T("Next-clip shortcut (paste sequence)", "逐条粘贴·下一条快捷键");
+    public static string SequenceHotkeyNote => T("Only ADVANCES an already running manual sequence — it never starts one. Start a queue from a card's right-click menu. Off by default.",
+                                                 "只推进已经启动的手动队列，不能用来启动队列；队列由卡片右键菜单创建。默认关闭。");
     public static string SequenceChordTitle => T("Next-clip chord", "下一条组合键");
     public static string SequenceIntervalTitle => T("Auto interval", "自动间隔");
     public static string SequenceIntervalNote => T("Delay between clips when pasting a sequence automatically.", "自动逐条粘贴时，每条之间的间隔。");
@@ -250,9 +263,26 @@ static class S
     public static string SequenceCopyNote => T("Never simulate Ctrl+V; just put each clip on the clipboard.", "不模拟 Ctrl+V，只把每条内容依次放到剪贴板上。");
     public static string HotkeyChordNote => T("Write a chord, e.g. Ctrl+3 or Ctrl+Alt+Shift+V", "填写组合键，如 Ctrl+3、Ctrl+Alt+Shift+V");
     public static string HotkeyChordInvalid => T("Use at least one modifier plus a key, e.g. Ctrl+3", "至少需要一个修饰键加一个按键，例如 Ctrl+3");
+    public static string HotkeyChordAvailable => T("Available", "可用");
+    public static string HotkeyChordChecking => T("Checking availability…", "检测占用中…");
+    public static string HotkeyChordTaken => T("Already used by another app or Windows. Pick a different chord.", "已被其他程序或系统占用，请换一个组合键");
+    public static string HotkeyChordDupMain => T("Same as the shortcut that opens the line.", "与「打开晾衣绳」的快捷键重复");
+    public static string HotkeyChordDupNote => T("Same as New sticky note (Ctrl+Alt+N).", "与「新建便签」快捷键（Ctrl+Alt+N）重复");
+    public static string HotkeyChordDupAux => T("Same as the other paste-mode shortcut.", "与另一个粘贴方式快捷键重复");
+    public static string HotkeyChordWinWarn => T("Contains Win: Windows may intercept it, so it might not fire.", "含 Win 键：系统可能截获，按下不一定生效");
+    public static string HotkeyChordImeWarn => T("Alt+Shift often switches input languages and may be swallowed by the IME.", "Alt+Shift 常用于切换输入语言，可能被输入法截获");
+    public static string HotkeyChordDisabled => T("Turn the switch on to check this chord.", "打开上方开关后才检查此组合键");
+    public static string HotkeyChordNoProbe => T("Availability is checked when saving.", "保存时检查是否可用");
+    public static string HotkeyChordSaveBlocked => T("A paste-mode shortcut conflicts. Fix the highlighted chords before saving.", "有粘贴方式快捷键冲突，请先修改标红的组合键再保存");
+    public static string HotkeyChordSaveBlockedTitle => T("Shortcut conflict", "快捷键冲突");
     public static string MsUnit => T(" ms", " 毫秒");
-    public static string AuxHotkeyFailed => T("A paste-mode shortcut is already used by another app. Change it in Settings.", "某个粘贴方式快捷键已被其他程序占用，请在设置里换一个。");
-    public static string SequenceNeedHotkey => T("Enable the paste sequence shortcut in Settings before using manual mode.", "使用手动逐条粘贴前，请先在设置里开启逐条粘贴快捷键。");
+    public static string HotkeyFailedMain => T("Open line ({0})", "打开晾衣绳（{0}）");
+    public static string HotkeyFailedNote => T("New sticky note ({0})", "新建便签（{0}）");
+    public static string HotkeyFailedNext => T("Next clip ({0})", "逐条粘贴下一条（{0}）");
+    public static string HotkeyFailedInsert => T("Quick insert ({0})", "快速插入（{0}）");
+    public static string HotkeyFailedDetail => T("These shortcuts could not be registered and will not fire:\n{0}\n\nThe chords are already used by another app or Windows. Pick different ones in Settings → Paste modes.",
+                                                 "以下快捷键注册失败，按下去不会生效：\n{0}\n\n组合键已被其他程序或系统占用，请在 设置 → 粘贴方式 里换一个。");
+    public static string SequenceNeedHotkey => T("Enable the 'Next-clip shortcut' in Settings before using manual paste sequence.", "使用手动逐条粘贴前，请先在设置里开启「下一条快捷键」。");
 
     // Item menu, right-click with a Ctrl+Click selection
     public static string QuickInsertThis => T("Quick insert this (clipboard untouched)", "快速插入这一条（不动剪贴板）");
@@ -264,10 +294,12 @@ static class S
     public static string MergeNeedTwo => T("Ctrl+Click at least two cards to merge.", "请按住 Ctrl 单击选中至少两张卡片再合并。");
     public static string MergeNoText => T("None of the selected cards has text to merge.", "选中的卡片没有可合并的文字。");
     public static string MergeCopied => T("Merged {0} clips into the clipboard ({1} skipped).", "已把 {0} 条合并到剪贴板（跳过 {1} 条）。");
-    public static string SequenceStarted => T("Sequence: {0} clips · {1} · next {2} (Esc stops)", "逐条粘贴：{0} 条 · {1} · 下一条 {2}（Esc 中止）");
-    public static string SequenceAuto => T("automatic", "自动");
-    public static string SequenceManual => T("manual", "手动");
+    public static string SequenceStartedAuto => T("Auto-pasting {0} clips every {1} ms (Esc stops)", "自动逐条粘贴：{0} 条 · 每 {1} 毫秒一条（Esc 中止）");
+    public static string SequenceStartedManual => T("Sequence: {0} clips · first one sent · press {1} for the next (Esc stops)", "逐条粘贴：{0} 条 · 第 1 条已贴出 · 按 {1} 贴下一条（Esc 中止）");
     public static string SequenceStopped => T("Paste sequence stopped.", "逐条粘贴已中止。");
+    public static string SequenceFinished => T("Paste sequence finished.", "逐条粘贴已完成。");
+    public static string SequenceNoQueue => T("No paste sequence is running. This chord only sends the NEXT clip: Ctrl+Click at least two cards, then right-click 'Paste N clips one by one…' to start a queue.",
+                                               "当前没有逐条粘贴队列。这个组合键只负责贴下一条：请先按住 Ctrl 单击选中至少两张卡片，再右键「逐条粘贴这 N 条…」启动队列。");
     public static string QuickInsertNoTarget => T("Open 绳忆 from the window you want to type into, then try quick insert again.", "请先从要输入的窗口里呼出 绳忆，再使用快速插入。");
     public static string QuickInsertNothing => T("No text clip to insert yet.", "还没有可以插入的文字内容。");
     public static string QuickInsertCopied => T("Copied (quick insert is set to copy only).", "已复制（快速插入当前设为仅复制）。");

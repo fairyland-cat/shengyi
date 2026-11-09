@@ -496,6 +496,90 @@ static class Fields
         };
     }
 
+    // Editable − value + field for wide numeric ranges (the smart-order window spans
+    // 1..129600 minutes). Any integer can be typed; it is clamped on Enter / focus loss.
+    // The buttons step by a magnitude suited to the current value, so 5-minute tweaks and
+    // day-wide jumps are both one click away. The suffix sits outside the editable text.
+    public static Border NumberStepper(int value, int min, int max, Action<int> changed, string suffix)
+    {
+        value = Math.Clamp(value, min, max);
+        var box = new TextBox
+        {
+            Text = value.ToString(),
+            Width = 72,
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = Theme.B(Theme.Ink),
+            CaretBrush = Theme.B(Theme.Ink),
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            TextAlignment = TextAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        // Live-update for every parseable value (clamped, but never rewriting the text
+        // mid-typing). This keeps Result in sync even if Save is clicked before focus moves.
+        box.TextChanged += (_, _) =>
+        {
+            if (!int.TryParse(box.Text, out int v)) return;
+            int next = Math.Clamp(v, min, max);
+            if (next == value) return;
+            value = next;
+            changed(value);
+        };
+        void Normalize()
+        {
+            int next = int.TryParse(box.Text, out int v) ? Math.Clamp(v, min, max) : value;
+            if (next != value) { value = next; changed(value); } // e.g. typed 200000 → clamped to max
+            box.Text = value.ToString();
+        }
+        box.LostKeyboardFocus += (_, _) => Normalize();
+        box.KeyDown += (_, e) => { if (e.Key == Key.Enter) { Normalize(); e.Handled = true; } };
+        box.PreviewTextInput += (_, e) =>
+        {
+            // Digits only; space / letters / punctuation would otherwise need a later revert.
+            foreach (char c in e.Text) if (c < '0' || c > '9') { e.Handled = true; break; }
+        };
+
+        Border StepButton(string glyph, int sign)
+        {
+            var k = new Border
+            {
+                Width = 28, Height = 28, CornerRadius = new CornerRadius(8), Cursor = Cursors.Hand, Background = Brushes.Transparent,
+                Child = new TextBlock { Text = glyph, FontSize = 15, Foreground = Theme.B(Theme.Body), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, -2, 0, 0) },
+            };
+            k.MouseEnter += (_, _) => k.Background = Theme.B(Theme.P.Chip);
+            k.MouseLeave += (_, _) => k.Background = Brushes.Transparent;
+            k.MouseLeftButtonUp += (_, e) =>
+            {
+                e.Handled = true;
+                Normalize(); // do not discard a value the user just typed
+                int step = value < 10 ? 1 : value < 60 ? 5 : value < 1440 ? 15 : value < 10080 ? 60 : 1440;
+                int next = Math.Clamp(value + sign * step, min, max);
+                box.Text = next.ToString();
+                if (next == value) return;
+                value = next;
+                changed(value);
+            };
+            return k;
+        }
+        var unit = new TextBlock { Text = suffix, FontSize = 12, Foreground = Theme.B(Theme.Muted), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(3, 0, 4, 0) };
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(StepButton("−", -1));
+        row.Children.Add(box);
+        row.Children.Add(unit);
+        row.Children.Add(StepButton("+", 1));
+        return new Border
+        {
+            CornerRadius = new CornerRadius(11),
+            Background = Theme.B(Theme.Surface),
+            BorderBrush = Theme.B(Theme.Line),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(3),
+            Child = row,
+        };
+    }
+
     // Shortcut shown as keycaps: [Ctrl] [Alt] [V].
     public static StackPanel Keycaps(string combo, bool recording)
     {

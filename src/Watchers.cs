@@ -15,8 +15,17 @@ namespace Shengyi;
 // Hidden message-only window: receives the global hotkey and clipboard notifications.
 sealed class MessageWindow : IDisposable
 {
-    const int HotkeyId = 1, NoteHotkeyId = 2, NextHotkeyId = 3, InsertHotkeyId = 4;
+    const int HotkeyId = 1, NoteHotkeyId = 2, NextHotkeyId = 3, InsertHotkeyId = 4, ProbeHotkeyId = 5;
+    const uint NoRepeat = 0x4000;   // MOD_NOREPEAT
+    const uint NoteMods = 0x1 | 0x2;
+    const uint NoteVk = 0x4E;
     readonly HwndSource source;
+
+    // Mirror of what is registered right now, so ProbeChord can release everything and
+    // faithfully put it back. ClearHotkey() is also used while the settings window records
+    // a new primary chord; that suspended state must NOT be resurrected by a probe.
+    bool mainOn, noteOn, nextOn, insertOn;
+    uint mainMods, mainVk, nextMods, nextVk, insertMods, insertVk;
 
     public event Action? Hotkey;
     public event Action? NoteHotkey;
@@ -44,36 +53,71 @@ sealed class MessageWindow : IDisposable
     public bool SetHotkey(uint mods, uint vk)
     {
         ClearHotkey();
-        return Native.RegisterHotKey(source.Handle, HotkeyId, mods | 0x4000 /* MOD_NOREPEAT */, vk);
+        mainMods = mods; mainVk = vk;
+        mainOn = Native.RegisterHotKey(source.Handle, HotkeyId, mods | NoRepeat, vk);
+        return mainOn;
     }
 
-    public void ClearHotkey() => Native.UnregisterHotKey(source.Handle, HotkeyId);
+    public void ClearHotkey()
+    {
+        Native.UnregisterHotKey(source.Handle, HotkeyId);
+        mainOn = false;
+    }
 
     // A second, fixed chord for "new sticky note" — notes are for catching a thought at any
     // moment, including while the line is hidden and has no keyboard focus.
-    public bool SetNoteHotkey() => Native.RegisterHotKey(source.Handle, NoteHotkeyId, 0x1 | 0x2 | 0x4000, 0x4E); // Ctrl+Alt+N
+    public bool SetNoteHotkey()
+    {
+        noteOn = Native.RegisterHotKey(source.Handle, NoteHotkeyId, NoteMods | NoRepeat, NoteVk);
+        return noteOn;
+    }
 
-    // The two P2 shortcuts are optional and configured in Settings. MOD_NOREPEAT (0x4000) keeps
-    // a held key from firing a whole sequence at once. Returns false if a chord was taken already.
-    public bool SetAuxHotkeys(bool nextOn, uint nextMods, uint nextVk, bool insertOn, uint insertMods, uint insertVk)
+    // The two P2 shortcuts are optional and configured in Settings. MOD_NOREPEAT keeps a
+    // held key from firing a whole sequence at once. Returning a per-chord result lets the
+    // tray name the exact shortcut that lost a race for a chord.
+    public AuxHotkeyResult SetAuxHotkeys(bool nextOnReq, uint nMods, uint nVk, bool insertOnReq, uint iMods, uint iVk)
     {
         ClearAuxHotkeys();
-        bool ok = true;
-        if (nextOn) ok &= Native.RegisterHotKey(source.Handle, NextHotkeyId, nextMods | 0x4000, nextVk);
-        if (insertOn) ok &= Native.RegisterHotKey(source.Handle, InsertHotkeyId, insertMods | 0x4000, insertVk);
-        return ok;
+        nextMods = nMods; nextVk = nVk; insertMods = iMods; insertVk = iVk;
+        if (nextOnReq) nextOn = Native.RegisterHotKey(source.Handle, NextHotkeyId, nextMods | NoRepeat, nextVk);
+        if (insertOnReq) insertOn = Native.RegisterHotKey(source.Handle, InsertHotkeyId, insertMods | NoRepeat, insertVk);
+        return new AuxHotkeyResult(!nextOnReq || nextOn, !insertOnReq || insertOn);
     }
 
     public void ClearAuxHotkeys()
     {
         Native.UnregisterHotKey(source.Handle, NextHotkeyId);
         Native.UnregisterHotKey(source.Handle, InsertHotkeyId);
+        nextOn = insertOn = false;
+    }
+
+    // Windows has no "is this chord free?" API: the only authoritative answer is to try
+    // RegisterHotKey (failure = ERROR_HOTKEY_ALREADY_REGISTERED, 1409). Our own four
+    // chords would always look taken, so release them for the duration of the probe.
+    // Verified on Windows 11: UnregisterHotKey followed by re-registering the same id and
+    // chord succeeds, and MOD_NOREPEAT does not change a chord's identity.
+    public bool ProbeChord(uint mods, uint vk)
+    {
+        bool hadMain = mainOn, hadNote = noteOn, hadNext = nextOn, hadInsert = insertOn;
+        var hwnd = source.Handle;
+        foreach (int id in new[] { HotkeyId, NoteHotkeyId, NextHotkeyId, InsertHotkeyId })
+            Native.UnregisterHotKey(hwnd, id);
+
+        bool free = Native.RegisterHotKey(hwnd, ProbeHotkeyId, mods | NoRepeat, vk);
+        if (free) Native.UnregisterHotKey(hwnd, ProbeHotkeyId);
+
+        if (hadMain) mainOn = Native.RegisterHotKey(hwnd, HotkeyId, mainMods | NoRepeat, mainVk);
+        if (hadNote) noteOn = Native.RegisterHotKey(hwnd, NoteHotkeyId, NoteMods | NoRepeat, NoteVk);
+        if (hadNext) nextOn = Native.RegisterHotKey(hwnd, NextHotkeyId, nextMods | NoRepeat, nextVk);
+        if (hadInsert) insertOn = Native.RegisterHotKey(hwnd, InsertHotkeyId, insertMods | NoRepeat, insertVk);
+        return free;
     }
 
     public void Dispose()
     {
         ClearHotkey();
         Native.UnregisterHotKey(source.Handle, NoteHotkeyId);
+        noteOn = false;
         ClearAuxHotkeys();
         Native.RemoveClipboardFormatListener(source.Handle);
         source.Dispose();

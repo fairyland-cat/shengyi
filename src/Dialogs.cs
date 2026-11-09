@@ -5,8 +5,121 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace Shengyi;
+
+// A typed global chord with live availability feedback. Local conflicts (another 绳忆
+// shortcut) and advisories are pure logic; the real "is it taken?" check goes through
+// MessageWindow.ProbeChord, which temporarily releases our own hotkeys.
+sealed class ChordFieldBox : StackPanel
+{
+    const int DebounceMs = 350;
+    readonly TextBox box;
+    readonly TextBlock hint;
+    readonly UIElement field;
+    readonly Func<bool> enabled;
+    readonly Func<uint, uint, (string? block, string? warn)> local;
+    readonly Func<uint, uint, bool>? probe;
+    readonly DispatcherTimer timer;
+    bool valid;
+    uint mods, vk;
+
+    public ChordFieldBox(string initial, Action<uint, uint> apply, Func<bool> enabled,
+        Func<uint, uint, (string? block, string? warn)> local, Func<uint, uint, bool>? probe)
+    {
+        this.enabled = enabled;
+        this.local = local;
+        this.probe = probe;
+        MinWidth = 168;
+        box = new TextBox { Text = initial, Width = 168, ToolTip = S.HotkeyChordNote };
+        field = Fields.Wrap(box);
+        hint = Theme.Text("", 10.5, Theme.Faint);
+        hint.Margin = new Thickness(2, 4, 0, 0);
+        Children.Add(field);
+        Children.Add(hint);
+
+        timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(DebounceMs) };
+        timer.Tick += (_, _) => { timer.Stop(); ProbeNow(); };
+        box.TextChanged += (_, _) => OnTextChanged(apply);
+        if (KeyChord.TryParse(initial, out uint m0, out uint k0)) { valid = true; mods = m0; vk = k0; }
+        Refresh();
+    }
+
+    void OnTextChanged(Action<uint, uint> apply)
+    {
+        timer.Stop();
+        if (KeyChord.TryParse(box.Text, out uint m, out uint k))
+        {
+            valid = true; mods = m; vk = k;
+            apply(m, k);          // only well-formed chords ever reach Result
+        }
+        else valid = false;
+        Reevaluate(sync: false);
+    }
+
+    // Called when the window opens and whenever the enable switch flips: one synchronous
+    // probe is cheap and gives an accurate status immediately.
+    public void Refresh()
+    {
+        timer.Stop();
+        Reevaluate(sync: true);
+    }
+
+    // Save re-checks synchronously so a debounce timer can never let a conflict through.
+    public bool ValidateForSave()
+    {
+        timer.Stop();
+        if (!valid) { Show(S.HotkeyChordInvalid, 2); return false; }
+        if (!enabled()) { Show("", 0); return true; }
+        var (block, warn) = local(mods, vk);
+        if (block != null) { Show(block, 2); return false; }
+        if (probe != null && !probe(mods, vk)) { Show(S.HotkeyChordTaken, 2); return false; }
+        Show(warn ?? S.HotkeyChordAvailable, warn != null ? 1 : 0);
+        return true;
+    }
+
+    void Reevaluate(bool sync)
+    {
+        if (!valid) { Show(S.HotkeyChordInvalid, 2); return; }
+        if (!enabled()) { Show(S.HotkeyChordDisabled, 0); return; }
+        var (block, warn) = local(mods, vk);
+        if (block != null) { Show(block, 2); return; }
+        if (probe == null) { Show(warn ?? S.HotkeyChordNoProbe, warn != null ? 1 : 0); return; }
+        if (!sync) { Show(S.HotkeyChordChecking, 1); timer.Start(); return; }
+        ProbeNow();
+    }
+
+    void ProbeNow()
+    {
+        if (!valid || !enabled() || probe == null) return;
+        var (block, warn) = local(mods, vk);
+        if (block != null) { Show(block, 2); return; }
+        if (!probe(mods, vk)) { Show(S.HotkeyChordTaken, 2); return; }
+        Show(warn ?? S.HotkeyChordAvailable, warn != null ? 1 : 0);
+    }
+
+    void Show(string text, int level)
+    {
+        hint.Text = text;
+        hint.Foreground = Theme.B(text.Length == 0 ? Theme.Faint : StatusInk(level));
+        var edge = Theme.B(level == 2 ? StatusInk(2) : Theme.Line);
+        box.BorderBrush = edge;
+        if (field is Border b) b.BorderBrush = edge;
+    }
+
+    // Keep the status legible on both the light palettes and graphite.
+    static Color StatusInk(int level)
+    {
+        bool dark = Theme.Luma(Theme.Surface) < 128;
+        return level switch
+        {
+            2 => dark ? Color.FromRgb(0xF0, 0x95, 0x95) : Color.FromRgb(0xA3, 0x2D, 0x2D),
+            1 => dark ? Color.FromRgb(0xEF, 0x9F, 0x27) : Color.FromRgb(0x85, 0x4F, 0x0B),
+            _ => dark ? Color.FromRgb(0x97, 0xC4, 0x59) : Color.FromRgb(0x3B, 0x6D, 0x11),
+        };
+    }
+}
 
 static class About
 {
@@ -203,16 +316,20 @@ sealed class SettingsWindow : ChromeWindow
     public bool StartWithWindows { get; private set; }
 
     readonly Action suspendHotkey, resumeHotkey;
+    readonly Func<uint, uint, bool>? probeChord;
     readonly Border hotkeyBox;
     bool recording;
 
-    public SettingsWindow(Settings current, bool startWithWindows, Action suspendHotkey, Action resumeHotkey)
+    // probeChord is null in the offline screenshot renderer, which has no MessageWindow.
+    public SettingsWindow(Settings current, bool startWithWindows, Action suspendHotkey, Action resumeHotkey,
+        Func<uint, uint, bool>? probeChord = null)
         : base(S.SettingsTitle, 800, 1000)
     {
         Result = current.Clone();
         StartWithWindows = startWithWindows;
         this.suspendHotkey = suspendHotkey;
         this.resumeHotkey = resumeHotkey;
+        this.probeChord = probeChord;
 
         // Shortcut recorder: click it, press the new combination. Esc cancels.
         hotkeyBox = new Border
@@ -266,14 +383,18 @@ sealed class SettingsWindow : ChromeWindow
         var quickOn = new Toggle(Result.QuickInsertEnabled);
         quickOn.Changed += () => Result.QuickInsertEnabled = quickOn.IsOn;
         var quickChord = ChordField(KeyChord.Describe(Result.QuickInsertModifiers, Result.QuickInsertKey),
-            (m, k) => { Result.QuickInsertModifiers = m; Result.QuickInsertKey = k; });
+            (m, k) => { Result.QuickInsertModifiers = m; Result.QuickInsertKey = k; },
+            () => Result.QuickInsertEnabled, (m, k) => LocalChordCheck(m, k, 2), probeChord);
+        quickOn.Changed += quickChord.Refresh;
         var quickCopy = new Toggle(Result.QuickInsertCopyOnly);
         quickCopy.Changed += () => Result.QuickInsertCopyOnly = quickCopy.IsOn;
 
         var seqOn = new Toggle(Result.SequenceHotkeyEnabled);
         seqOn.Changed += () => Result.SequenceHotkeyEnabled = seqOn.IsOn;
         var seqChord = ChordField(KeyChord.Describe(Result.SequenceModifiers, Result.SequenceKey),
-            (m, k) => { Result.SequenceModifiers = m; Result.SequenceKey = k; });
+            (m, k) => { Result.SequenceModifiers = m; Result.SequenceKey = k; },
+            () => Result.SequenceHotkeyEnabled, (m, k) => LocalChordCheck(m, k, 1), probeChord);
+        seqOn.Changed += seqChord.Refresh;
         var seqInterval = Fields.Stepper(Math.Clamp(Result.SequenceIntervalMs, 150, 10000),
             150, 10000, 100, v => Result.SequenceIntervalMs = v, S.MsUnit);
         var seqCopy = new Toggle(Result.SequenceCopyOnly);
@@ -368,8 +489,9 @@ sealed class SettingsWindow : ChromeWindow
             v => { Result.CardSizePercent = v; Refresh(); }, "%");
         var freqThreshold = Fields.Stepper(Math.Clamp(Result.FreqThreshold, 0, 20), 0, 20, 1,
             v => Result.FreqThreshold = v);
-        var freqWindow = Fields.Stepper(Math.Clamp(Result.FreqWindowDays, 1, 90), 1, 90, 1,
-            v => Result.FreqWindowDays = v, S.DaysUnit);
+        var freqWindow = Fields.NumberStepper(FreqWindow.Clamp(Result.FreqWindowMinutes),
+            FreqWindow.MinMinutes, FreqWindow.MaxMinutes,
+            v => Result.FreqWindowMinutes = v, S.MinutesUnit);
         int noteIndex = Math.Max(0, Array.IndexOf(Theme.NotePresets, Result.NoteColor));
         var noteSwatches = new Swatches(Theme.NotePresets.Select(Theme.ParseHex).ToArray(),
             noteIndex, i => S.NoteColorNames[i]);
@@ -457,7 +579,14 @@ sealed class SettingsWindow : ChromeWindow
         var cancel = new Pill(S.Cancel, false) { Margin = new Thickness(0, 0, 8, 0) };
         var save = new Pill(S.Save, true) { MinWidth = 132 };
         cancel.Click += Close;
-        save.Click += () => DialogResult = true;
+        save.Click += () =>
+        {
+            bool quickOk = quickChord.ValidateForSave();
+            bool seqOk = seqChord.ValidateForSave();
+            if (quickOk && seqOk) DialogResult = true;
+            else MessageBox.Show(S.HotkeyChordSaveBlocked, S.HotkeyChordSaveBlockedTitle,
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        };
 
         Body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         Body.RowDefinitions.Add(new RowDefinition());
@@ -479,28 +608,36 @@ sealed class SettingsWindow : ChromeWindow
         return e;
     }
 
+    // Cross-checks a chord against the other chords in this very settings object. Blocking
+    // conflicts prevent saving; advisories are yellow hints that never block.
+    (string? block, string? warn) LocalChordCheck(uint mods, uint vk, int self)
+    {
+        var conflict = HotkeyCheck.SelfConflict(mods, vk, self,
+            Result.HotkeyModifiers, Result.HotkeyKey,
+            Result.SequenceHotkeyEnabled, Result.SequenceModifiers, Result.SequenceKey,
+            Result.QuickInsertEnabled, Result.QuickInsertModifiers, Result.QuickInsertKey);
+        string? block = conflict switch
+        {
+            ChordConflict.MainHotkey => S.HotkeyChordDupMain,
+            ChordConflict.NewSticky => S.HotkeyChordDupNote,
+            ChordConflict.OtherAux => S.HotkeyChordDupAux,
+            _ => null,
+        };
+        string? warn = HotkeyCheck.Advisory(mods) switch
+        {
+            ChordAdvisory.WinReserved => S.HotkeyChordWinWarn,
+            ChordAdvisory.InputMethod => S.HotkeyChordImeWarn,
+            _ => null,
+        };
+        return (block, warn);
+    }
+
     // A typed chord such as "Ctrl+3". Only valid chords are written back to Result, so an
     // unfinished edit can never leave the settings file with a broken shortcut.
-    static UIElement ChordField(string initial, Action<uint, uint> apply)
-    {
-        var box = new TextBox { Text = initial, Width = 168, ToolTip = S.HotkeyChordNote };
-        var field = Fields.Wrap(box);
-        var hint = Theme.Text("", 10.5, Theme.Faint);
-        hint.Margin = new Thickness(2, 4, 0, 0);
-        box.TextChanged += (_, _) =>
-        {
-            if (KeyChord.TryParse(box.Text, out uint mods, out uint vk))
-            {
-                apply(mods, vk);
-                hint.Text = "";
-            }
-            else hint.Text = S.HotkeyChordInvalid;
-        };
-        var panel = new StackPanel { MinWidth = 168 };
-        panel.Children.Add(field);
-        panel.Children.Add(hint);
-        return panel;
-    }
+    static ChordFieldBox ChordField(string initial, Action<uint, uint> apply,
+        Func<bool> enabled, Func<uint, uint, (string? block, string? warn)> local,
+        Func<uint, uint, bool>? probe) =>
+        new(initial, apply, enabled, local, probe);
 
     // Avatar, name, GitHub link and version.
     static UIElement AuthorBadge()

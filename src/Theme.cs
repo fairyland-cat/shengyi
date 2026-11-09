@@ -66,7 +66,7 @@ static class Theme
     // Also snapshotted here so the line window and every card read the same live values.
     // Apply() always raises Changed, so saving settings re-sorts the cards immediately.
     public static int FreqThreshold => Math.Clamp(snapshot.FreqThreshold, 0, 20);
-    public static int FreqWindowDays => Math.Clamp(snapshot.FreqWindowDays, 1, 90);
+    public static int FreqWindowMinutes => FreqWindow.Clamp(snapshot.FreqWindowMinutes);
 
     // ---- 0.7.0 · content-tinted cards ---------------------------------------
     // The tint scheme lives in Settings but every card / line reads it through Theme, so

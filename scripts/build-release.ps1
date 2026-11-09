@@ -6,7 +6,10 @@
 # Needs a .NET 8 SDK and Inno Setup 6 or 7 (7 recommended). The installer window is compiled with
 # the .NET Framework compiler that comes with Windows. Override tool paths with -Dotnet / -Iscc
 # when they are not on PATH or installed in a non-default directory.
-param([string]$Version = '', [string]$Iscc = '', [string]$Dotnet = '')
+# Screenshots are rendered from this build's binaries BEFORE the source archive is packed, so one
+# run produces a consistent release. -SkipShots skips that step (shots may then show an older version).
+# check-release.ps1 runs at the end and verifies versions, shots-in-zip and source freshness.
+param([string]$Version = '', [string]$Iscc = '', [string]$Dotnet = '', [switch]$SkipShots)
 
 $ErrorActionPreference = 'Stop'
 # This environment wraps Remove-Item with a trash-based safe-delete hook that fails closed on the
@@ -53,11 +56,16 @@ Write-Host "== Publishing shengyi $Version (SDK: $Dotnet)"
     -p:DebugType=none -p:Version=$Version -o $publish
 if ($LASTEXITCODE) { throw 'dotnet publish failed' }
 $portable = Join-Path $dist "shengyi-$Version-portable.exe"
+$shotExe = $portable
+$shotTemp = Join-Path $dist "shengyi-$Version-shots.tmp.exe"
 try {
     Copy-Item (Join-Path $publish 'shengyi.exe') $portable -Force -ErrorAction Stop
 } catch {
     # A running tray instance holds an exclusive handle on its own exe. The freshly published
     # build is identical (same sources, same flags) and still feeds the installer, so keep it.
+    # Screenshots still need THIS build, so keep a private copy in dist/ for rendering only.
+    Copy-Item (Join-Path $publish 'shengyi.exe') $shotTemp -Force -ErrorAction Stop
+    $shotExe = $shotTemp
     Write-Host "   NOTE: portable exe is in use; keeping the existing copy (installer is unaffected)."
 }
 
@@ -103,8 +111,40 @@ $icon = Join-Path $root 'assets\shengyi.ico'
     /reference:System.Xaml.dll /reference:System.Core.dll /reference:System.Windows.Forms.dll `
     (Join-Path $shell 'Setup.cs') $info
 if ($LASTEXITCODE) { throw 'Installer window failed to compile' }
+
+# Clean intermediates BEFORE rendering: a single-file exe that just exited may still hold a
+# handle on its own path for a moment, and deleting publish/ while that happens fails.
 Clear-BuildDir $engineDir
 Clear-BuildDir $publish
+
+# README shots carry the version number, so they must come from THIS build's binaries. Rendering
+# them before "Packing source" removes the old pack -> re-shoot -> re-pack loop: the zip now
+# always contains the shots just generated. The rendering exe lives in dist/, which this script
+# never deletes, so screenshots cannot collide with intermediate cleanup.
+if (-not $SkipShots) {
+    $docs = Join-Path $root 'docs'
+    $setup = Join-Path $dist "shengyi-Setup-$Version.exe"
+    if (-not (Test-Path $shotExe)) { throw "Freshly built app exe is missing: $shotExe" }
+    if (-not (Test-Path $setup)) { throw "Freshly built installer is missing: $setup" }
+    Write-Host "== Rendering screenshots"
+    # Both binaries are GUI-subsystem apps: PowerShell's & does NOT wait for them, so the old
+    # flow could pack the zip while shots were still being written. Start-Process -Wait is
+    # mandatory here; without it the archive silently contains a half-rendered docs/ tree.
+    $quotedDocs = '"' + $docs + '"'
+    $p = Start-Process -FilePath $shotExe -ArgumentList @('--shots', $quotedDocs) -Wait -PassThru
+    if ($p.ExitCode -ne 0) { throw "App screenshots failed (exit $($p.ExitCode))" }
+    foreach ($stage in 'ready', 'installing', 'done') {
+        $out = Join-Path $docs "setup-$stage.png"
+        $quotedOut = '"' + $out + '"'
+        $p = Start-Process -FilePath $setup -ArgumentList @('--shot', $quotedOut, $stage) -Wait -PassThru
+        if ($p.ExitCode -ne 0) { throw "Installer screenshot failed: $stage (exit $($p.ExitCode))" }
+    }
+} else {
+    Write-Host "   NOTE: -SkipShots; docs/*.png are left as-is and may show an older version."
+}
+if ($shotExe -ne $portable) {
+    try { [System.IO.File]::Delete($shotExe) } catch { }
+}
 
 Write-Host "== Packing source"
 $src = Join-Path $dist "shengyi-$Version-src"
@@ -114,6 +154,9 @@ foreach ($item in 'src', 'assets', 'docs', 'scripts', 'installer', 'shengyi.cspr
 }
 Compress-Archive -Path $src -DestinationPath (Join-Path $dist "shengyi-$Version-src.zip") -Force
 Clear-BuildDir $src
+
+Write-Host "== Checking the release"
+& (Join-Path $PSScriptRoot 'check-release.ps1') -ExpectedVersion $Version
 
 Write-Host "== Done"
 Get-ChildItem $dist -File | Format-Table Name, @{ n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } } -AutoSize

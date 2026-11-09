@@ -66,20 +66,15 @@ sealed partial class ClipItem
     [JsonIgnore] public bool IsFront => Pinned || IsSticky;
     [JsonIgnore] public string? ImagePath => Image == null ? null : Path.Combine(ClipStore.ImageDir, Image);
     [JsonIgnore] public long LastUsedMs => UseTimes is { Count: > 0 } t ? t[^1] : 0;
-    [JsonIgnore] public int RecentUses => CountUses(Theme.FreqWindowDays);
+    [JsonIgnore] public int RecentUses => CountUses(Theme.FreqWindowMinutes);
 
-    public static long Cutoff(int windowDays) =>
-        DateTimeOffset.UtcNow.AddDays(-Math.Clamp(windowDays, 1, 90)).ToUnixTimeMilliseconds();
+    // 0.8.0: the argument is minutes. All arithmetic lives in FreqWindow so it can be
+    // verified without WPF; the 90-day retention of UseTimes caps the usable range.
+    public static long Cutoff(int windowMinutes) => FreqWindow.CutoffUtcMs(windowMinutes);
 
-    public int CountUses(int windowDays) => CountUses(Cutoff(windowDays));
+    public int CountUses(int windowMinutes) => CountUses(Cutoff(windowMinutes));
 
-    public int CountUses(long cutoffUtcMs)
-    {
-        if (UseTimes is not { Count: > 0 } times) return 0;
-        int n = 0;
-        for (int i = times.Count - 1; i >= 0 && times[i] >= cutoffUtcMs; i--) n++;
-        return n; // oldest first, so the first stale stamp ends the scan
-    }
+    public int CountUses(long cutoffUtcMs) => FreqWindow.CountUses(UseTimes, cutoffUtcMs);
 
 }
 
@@ -155,7 +150,7 @@ static class Ranking
         int threshold = Theme.FreqThreshold;
         if (threshold <= 0) return pinned.Concat(rest).ToList();
 
-        long cutoff = ClipItem.Cutoff(Theme.FreqWindowDays);
+        long cutoff = ClipItem.Cutoff(Theme.FreqWindowMinutes);
         var scored = rest.Select(i => (item: i, uses: i.CountUses(cutoff))).ToList();
         var hot = scored.Where(x => x.uses >= threshold)
             .OrderByDescending(x => x.uses)

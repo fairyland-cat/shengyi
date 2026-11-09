@@ -197,19 +197,35 @@ sealed class Actions
             seqTimer.Start();
         }
         SequenceChanged?.Invoke();
-        Notify?.Invoke(string.Format(S.SequenceStarted, sequence.Count,
-            auto ? S.SequenceAuto : S.SequenceManual,
-            KeyChord.Describe(settings().SequenceModifiers, settings().SequenceKey)));
+        // Manual mode has already sent clip #1 below. Say so explicitly: the chord only
+        // ADVANCES a queue, it never starts one. Auto mode needs no chord at all.
+        Notify?.Invoke(auto
+            ? string.Format(S.SequenceStartedAuto, sequence.Count,
+                Math.Clamp(settings().SequenceIntervalMs, 150, 10000))
+            : string.Format(S.SequenceStartedManual, sequence.Count,
+                KeyChord.Describe(settings().SequenceModifiers, settings().SequenceKey)));
         if (!auto) SequenceNext(); // first clip goes out immediately; the hotkey advances the rest
     }
 
     public void SequenceNext()
     {
-        if (sequence.Count == 0) { StopSequence(); return; }
+        if (sequence.Count == 0)
+        {
+            // The normal end of a queue goes through StopSequence() right after the last
+            // dequeue, so reaching here means the chord was pressed with nothing running.
+            // Explain how to start one instead of silently doing nothing (the old behaviour).
+            if (!seqTimer.IsEnabled) Notify?.Invoke(S.SequenceNoQueue);
+            StopSequence(notify: false);
+            return;
+        }
         var item = sequence.Dequeue();
         bool copied = Copy(item, false);
         if (copied && !seqCopyOnly) _ = PasteInto(seqTarget);
-        if (sequence.Count == 0) StopSequence();
+        if (sequence.Count == 0)
+        {
+            StopSequence(notify: false);
+            Notify?.Invoke(S.SequenceFinished); // "finished", not the Esc "stopped" message
+        }
         else if (!seqAuto) SequenceChanged?.Invoke();
     }
 
@@ -226,26 +242,37 @@ sealed class Actions
 
     // Injects Unicode characters straight into the focused control. The clipboard is never read
     // or written, so whatever the user copied before stays there.
-    public void QuickInsert(ClipItem? chosen = null)
+    public async void QuickInsert(ClipItem? chosen = null)
     {
         var fg = Native.GetForegroundWindow();
-        if (Native.IsOwn(fg))
-        {
-            if (reveal.PasteTarget == IntPtr.Zero || !Native.IsWindow(reveal.PasteTarget))
-            {
-                Notify?.Invoke(S.QuickInsertNoTarget);
-                return;
-            }
-            reveal.RetractAll(); // hands focus back to the window we were typing in
-        }
+        bool fromLine = Native.IsOwn(fg);
+        IntPtr target = fromLine ? reveal.PasteTarget : IntPtr.Zero;
+
+        // Pick BEFORE retracting: while the line is out, an active search box should win over
+        // "latest text". RetractAll() clears IsOut and would lose that context.
         var item = chosen ?? PickInsertItem();
+        if (fromLine && (target == IntPtr.Zero || !Native.IsWindow(target)))
+        { Notify?.Invoke(S.QuickInsertNoTarget); return; }
         if (item == null || string.IsNullOrEmpty(item.Text)) { Notify?.Invoke(S.QuickInsertNothing); return; }
         if (settings().QuickInsertCopyOnly)
         {
             if (Copy(item, true)) Notify?.Invoke(S.QuickInsertCopied);
             return;
         }
+        if (fromLine) reveal.RetractAll(); // hands focus back to the window we were typing in
         store.RecordUse(item);
+
+        // Same 90 ms settling that PasteInto() uses. Without it, a chord pressed while the
+        // line is out types into the closing line window (or nowhere). The wait also gives
+        // the user time to release the hotkey's own modifiers.
+        if (target != IntPtr.Zero) Native.ForceForeground(target);
+        await Task.Delay(90);
+        if (Native.IsOwn(Native.GetForegroundWindow()))
+        { Notify?.Invoke(S.QuickInsertNoTarget); return; }
+        // A still-held Ctrl/Alt/Shift would turn the injected characters into shortcuts.
+        // PasteInto() releases the same keys before simulating Ctrl+V.
+        foreach (ushort vk in new ushort[] { 0x10, 0x11, 0x12 })
+            if (Native.KeyDown(vk)) Native.SendKeys((vk, true));
         Native.SendUnicode(item.Text!);
     }
 

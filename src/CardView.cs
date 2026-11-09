@@ -125,8 +125,8 @@ sealed class CardView : Grid
         {
             tipText.Text = Item.IsSticky ? S.StickyTip
                 : Item.TotalUses == 0 ? S.UsageNone
-                : string.Format(S.UsageTip, Theme.FreqWindowDays,
-                    Item.CountUses(Theme.FreqWindowDays), Item.TotalUses);
+                : string.Format(S.UsageTip, S.WindowLabel(Theme.FreqWindowMinutes),
+                    Item.CountUses(Theme.FreqWindowMinutes), Item.TotalUses);
             if (!string.IsNullOrEmpty(Item.SourceApp))
                 tipText.Text += "  ·  " + string.Format(S.SourceTip, Item.SourceApp);
             if (Item.Tags is { Count: > 0 } tags)
