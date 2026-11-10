@@ -10,6 +10,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Forms = System.Windows.Forms;
 
@@ -66,8 +67,9 @@ sealed class Actions
                 try { bytes = File.ReadAllBytes(item.ImagePath!); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
                 bool placed = false;
-                // CF_BITMAP is the widely understood flavour; some formats (WebP) have no GDI+
-                // decoder, in which case the original format below is the only representation.
+                // CF_BITMAP (and the CF_DIB it implies) is the flavour every desktop app
+                // understands: Office, Paint, old editors. We always set it via GDI+, which
+                // decodes PNG/JPEG/GIF/BMP. WebP has no GDI+ decoder, handled below.
                 try
                 {
                     using var ms = new MemoryStream(bytes);
@@ -76,10 +78,39 @@ sealed class Actions
                     placed = true;
                 }
                 catch (Exception e) when (e is ArgumentException or ExternalException or IOException) { }
-                string? write = ImageFormats.WriteFormat(item.ImageFormat);
-                if (write != null)
+
+                // Standard MIME names that browsers, Electron apps (DingTalk/钉钉, Slack, web
+                // editors) and most modern programs require. Without these the clipboard only
+                // carried the legacy custom "PNG"/"JFIF"/"GIF" labels, so a paste into 钉钉 or a
+                // web page silently did nothing. null / unknown history is legacy PNG on disk
+                // (ImageFormats.Extension); WebP has no GDI+ decoder and is transcoded to PNG.
+                byte[] mimeBytes = bytes;
+                string? mime = item.ImageFormat switch
                 {
-                    data.SetData(write, false, new MemoryStream(bytes));
+                    ImageFormats.Png => "image/png",
+                    ImageFormats.Jpeg => "image/jpeg",
+                    ImageFormats.Gif => "image/gif",
+                    ImageFormats.Bmp => "image/bmp",
+                    ImageFormats.Webp => null,    // transcoded to PNG below
+                    _ => "image/png",             // null / unknown == legacy PNG on disk
+                };
+                if (mime == null) // WebP only: decode via WIC and re-emit as PNG
+                {
+                    var png = TranscodeToPng(bytes);
+                    if (png != null) { mime = "image/png"; mimeBytes = png; }
+                }
+                if (mime != null)
+                {
+                    data.SetData(mime, true, new MemoryStream(mimeBytes));
+                    placed = true;
+                }
+                // Bonus: the original on-disk format (exact bytes; GIF animation). Skipped when it
+                // duplicates the standard MIME key already written above, so the universal flavours
+                // stay the primary representation without clobbering apps that prefer native bytes.
+                string? native = ImageFormats.WriteFormat(item.ImageFormat);
+                if (native != null && native != mime)
+                {
+                    data.SetData(native, false, new MemoryStream(bytes));
                     placed = true;
                 }
                 if (!placed) return false;
@@ -106,6 +137,24 @@ sealed class Actions
             return true;
         }
         catch (ExternalException) { return false; }
+    }
+
+    // WebP (and any format System.Drawing cannot decode) → PNG via WIC, so the universal
+    // clipboard flavours exist even for formats GDI+ cannot read. Returns PNG bytes, or null.
+    static byte[]? TranscodeToPng(byte[] bytes)
+    {
+        try
+        {
+            using var msIn = new MemoryStream(bytes);
+            var decoder = BitmapDecoder.Create(msIn, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+            if (decoder.Frames.Count == 0) return null;
+            using var msOut = new MemoryStream();
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(decoder.Frames[0]);
+            encoder.Save(msOut);
+            return msOut.ToArray();
+        }
+        catch { return null; }
     }
 
     IntPtr TargetWindow() => reveal.PasteTarget != IntPtr.Zero ? reveal.PasteTarget : Native.GetForegroundWindow();

@@ -109,10 +109,14 @@ static class FullScreen
 {
     public static bool Covers(Forms.Screen screen)
     {
-        // QUNS_BUSY = 2, QUNS_RUNNING_D3D_FULL_SCREEN = 3, QUNS_PRESENTATION_MODE = 4.
-        // 5 is QUNS_ACCEPTS_NOTIFICATIONS, i.e. the ordinary desktop; treating it as full
-        // screen would suppress the top edge permanently.
-        if (Native.SHQueryUserNotificationState(out var state) == 0 && state is 2 or 3 or 4) return true;
+        // SHQueryUserNotificationState is system-wide, not per monitor. Only QUNS_RUNNING_D3D_FULL_SCREEN
+        // (3) is a reliable "get out of the way" signal — a genuine exclusive-fullscreen game or video.
+        // The older QUNS_BUSY (2) and QUNS_PRESENTATION_MODE (4) are reported spuriously by some GPU
+        // drivers, presentation utilities and laptops that were once docked to a projector, which would
+        // suppress the top-edge reveal everywhere for no reason (the classic "it stopped working on my
+        // ThinkPad" symptom). A real full-screen window — video player, PowerPoint slide show — is still
+        // caught by the foreground-rect check below.
+        if (Native.SHQueryUserNotificationState(out var state) == 0 && state == 3) return true;
 
         var fg = Native.GetForegroundWindow();
         if (fg == IntPtr.Zero || fg == Native.GetShellWindow() || fg == Native.GetDesktopWindow()) return false;
