@@ -62,9 +62,37 @@ sealed class AppController : IDisposable
             tray.ShowBalloonTip(5000, S.AppName, string.Format(S.Welcome, CurrentHotkey), Forms.ToolTipIcon.Info);
         }
         reveal.Start();
+        LogStartup();
     }
 
     string CurrentHotkey => HotkeyText.Describe(settings.HotkeyModifiers, settings.HotkeyKey);
+    string VersionText => typeof(AppController).Assembly.GetName().Version?.ToString() ?? "unknown";
+
+    // A whitelist of non-sensitive runtime state. Clipboard text, image bytes, excluded app
+    // names and full paths are intentionally absent — from both the log and the export.
+    void LogStartup()
+    {
+        Diag.Info("boot", "startup complete",
+            ("edge_reveal", settings.RevealAtTopEdge),
+            ("record_source", settings.RecordSourceApp),
+            ("quick_insert", settings.QuickInsertEnabled),
+            ("sequence_hotkey", settings.SequenceHotkeyEnabled),
+            ("win_v", settings.ReplaceWinV),
+            ("tint_scheme", settings.CardTintScheme),
+            ("freq_window_minutes", settings.FreqWindowMinutes),
+            ("hotkey", CurrentHotkey));
+        Diag.Info("boot", "dpi", ("mode", "PerMonitorV2 (app.manifest)"));
+        LogDisplays("enumerate");
+    }
+
+    void LogDisplays(string reason)
+    {
+        var screens = Forms.Screen.AllScreens;
+        Diag.Info("display", reason, ("count", screens.Length));
+        for (int i = 0; i < screens.Length; i++)
+            Diag.Info("display", "screen", ("index", i),
+                ("bounds", screens[i].Bounds.ToString()), ("primary", screens[i].Primary));
+    }
 
     // Both P2 global chords are optional. Registering them is idempotent: unregister first, so
     // toggling a setting off really releases the key instead of leaving a stale binding.
@@ -104,7 +132,14 @@ sealed class AppController : IDisposable
         hook.Enabled = settings.ReplaceWinV || running;
     }
 
-    void OnDisplaysChanged(object? sender, EventArgs e) => app.Dispatcher.BeginInvoke(BuildWindows);
+    void OnDisplaysChanged(object? sender, EventArgs e)
+    {
+        // Docking / undocking / scaling changes are exactly when stale Screen.Bounds would
+        // make the top-edge hot strip unreachable. Record both the event and the new geometry.
+        Diag.Info("display", "DisplaySettingsChanged");
+        LogDisplays("changed");
+        app.Dispatcher.BeginInvoke(BuildWindows);
+    }
 
     void BuildWindows()
     {
@@ -115,6 +150,8 @@ sealed class AppController : IDisposable
             var w = new LineWindow(screen, store, actions, () => settings);
             w.Dismissed += reveal.RetractAll;
             windows.Add(w);
+            Diag.Info("display", "window", ("index", windows.Count - 1),
+                ("scale", w.Scale), ("bounds", screen.Bounds.ToString()));
         }
     }
 
@@ -139,6 +176,7 @@ sealed class AppController : IDisposable
         menu.Items.Add(new Forms.ToolStripMenuItem(S.SettingsMenu, null, (_, _) => OpenSettings()));
         menu.Items.Add(new Forms.ToolStripMenuItem(S.OpenFolder, null, (_, _) =>
             Process.Start(new ProcessStartInfo("explorer.exe", $"\"{Settings.DataDir}\"") { UseShellExecute = true })));
+        menu.Items.Add(new Forms.ToolStripMenuItem(S.DiagExportMenu, null, (_, _) => ExportDiagnostics()));
         menu.Items.Add(new Forms.ToolStripMenuItem(S.ClearLine, null, (_, _) => ClearHistory()));
         menu.Items.Add(new Forms.ToolStripMenuItem(S.ResetUsage, null, (_, _) => ResetUsage()));
         menu.Items.Add(new Forms.ToolStripSeparator());
@@ -149,6 +187,46 @@ sealed class AppController : IDisposable
         tray.MouseClick += (_, e) => { if (e.Button == Forms.MouseButtons.Left) reveal.Toggle(); };
         UpdateShortcutLabel();
         UpdatePause();
+    }
+
+    // Local-only bundle: runtime state + the rolled log files. Nothing is uploaded; the user
+    // decides where to save it and whether to attach it to a bug report.
+    void ExportDiagnostics()
+    {
+        using var dlg = new Forms.SaveFileDialog
+        {
+            Title = S.DiagExportTitle,
+            FileName = $"shengyi-diag-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
+            Filter = "Zip files (*.zip)|*.zip",
+            InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+        };
+        if (dlg.ShowDialog() != Forms.DialogResult.OK) return;
+        try
+        {
+            var info = new Dictionary<string, string>
+            {
+                ["app_version"] = VersionText,
+                ["os"] = Environment.OSVersion.VersionString,
+                ["runtime"] = Environment.Version.ToString(),
+                ["dpi_awareness"] = "PerMonitorV2 (app.manifest)",
+                ["screens"] = string.Join(" ; ", Forms.Screen.AllScreens.Select(s => s.Bounds.ToString())),
+                ["diag_mode"] = Diag.ModeId(Diag.Mode),
+                ["settings.reveal_at_top_edge"] = settings.RevealAtTopEdge.ToString(),
+                ["settings.record_source_app"] = settings.RecordSourceApp.ToString(),
+                ["settings.quick_insert_enabled"] = settings.QuickInsertEnabled.ToString(),
+                ["settings.sequence_hotkey_enabled"] = settings.SequenceHotkeyEnabled.ToString(),
+                ["settings.freq_window_minutes"] = settings.FreqWindowMinutes.ToString(),
+                ["settings.card_tint_scheme"] = settings.CardTintScheme,
+            };
+            Diag.Export(dlg.FileName, info);
+            Diag.Info("diag", "bundle exported", ("log_files", Diag.Files().Count));
+            tray.ShowBalloonTip(3500, S.AppName, string.Format(S.DiagExportDone, dlg.FileName), Forms.ToolTipIcon.Info);
+        }
+        catch (Exception e)
+        {
+            Diag.Crash("diag.export", e);
+            MessageBox.Show(e.Message, S.AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     void PauseFor(TimeSpan span)
@@ -193,6 +271,7 @@ sealed class AppController : IDisposable
         }
         settings = next;
         settings.Save();
+        Diag.Configure(Diag.ParseMode(settings.DiagnosticsEnabled, settings.DiagnosticsLevel));
         store.RefreshTags();   // re-recognise history when 智能标签 was toggled
         Theme.Apply(settings); // repaints every line window and rebuilds its cards
         ApplyAuxHotkeys();     // pick up the two optional paste-mode chords

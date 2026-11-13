@@ -67,6 +67,11 @@ sealed class Settings
     // Paper colour used when a new sticky note is created. "auto" follows the active theme.
     public string NoteColor { get; set; } = "auto";
 
+    // 0.10.0 · local diagnostic log. Default = errors + key events. The log never contains
+    // clipboard text, image bytes or full file paths, and is never uploaded.
+    public bool DiagnosticsEnabled { get; set; } = true;
+    public string DiagnosticsLevel { get; set; } = "standard"; // "errors" | "standard" | "verbose"
+
     public static Settings Load()
     {
         try

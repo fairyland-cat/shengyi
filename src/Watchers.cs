@@ -55,6 +55,10 @@ sealed class MessageWindow : IDisposable
         ClearHotkey();
         mainMods = mods; mainVk = vk;
         mainOn = Native.RegisterHotKey(source.Handle, HotkeyId, mods | NoRepeat, vk);
+        int err = mainOn ? 0 : Marshal.GetLastWin32Error();
+        Diag.Write(mainOn ? DiagLevel.Info : DiagLevel.Warn, "hotkey", "main register",
+            ("chord", HotkeyText.Describe(mods, vk)), ("mods", mods), ("vk", vk),
+            ("ok", mainOn), ("win32", err), ("hint", "1409=already registered"));
         return mainOn;
     }
 
@@ -69,6 +73,9 @@ sealed class MessageWindow : IDisposable
     public bool SetNoteHotkey()
     {
         noteOn = Native.RegisterHotKey(source.Handle, NoteHotkeyId, NoteMods | NoRepeat, NoteVk);
+        Diag.Write(noteOn ? DiagLevel.Info : DiagLevel.Warn, "hotkey", "note register",
+            ("chord", HotkeyText.Describe(NoteMods, NoteVk)), ("ok", noteOn),
+            ("win32", noteOn ? 0 : Marshal.GetLastWin32Error()));
         return noteOn;
     }
 
@@ -79,8 +86,20 @@ sealed class MessageWindow : IDisposable
     {
         ClearAuxHotkeys();
         nextMods = nMods; nextVk = nVk; insertMods = iMods; insertVk = iVk;
-        if (nextOnReq) nextOn = Native.RegisterHotKey(source.Handle, NextHotkeyId, nextMods | NoRepeat, nextVk);
-        if (insertOnReq) insertOn = Native.RegisterHotKey(source.Handle, InsertHotkeyId, insertMods | NoRepeat, insertVk);
+        int nextErr = 0, insertErr = 0;
+        if (nextOnReq)
+        {
+            nextOn = Native.RegisterHotKey(source.Handle, NextHotkeyId, nextMods | NoRepeat, nextVk);
+            if (!nextOn) nextErr = Marshal.GetLastWin32Error();
+        }
+        if (insertOnReq)
+        {
+            insertOn = Native.RegisterHotKey(source.Handle, InsertHotkeyId, insertMods | NoRepeat, insertVk);
+            if (!insertOn) insertErr = Marshal.GetLastWin32Error();
+        }
+        Diag.Write(nextErr == 0 && insertErr == 0 ? DiagLevel.Info : DiagLevel.Warn, "hotkey", "aux register",
+            ("next_requested", nextOnReq), ("next_ok", nextOn), ("next_win32", nextErr),
+            ("insert_requested", insertOnReq), ("insert_ok", insertOn), ("insert_win32", insertErr));
         return new AuxHotkeyResult(!nextOnReq || nextOn, !insertOnReq || insertOn);
     }
 
@@ -104,12 +123,18 @@ sealed class MessageWindow : IDisposable
             Native.UnregisterHotKey(hwnd, id);
 
         bool free = Native.RegisterHotKey(hwnd, ProbeHotkeyId, mods | NoRepeat, vk);
+        int err = free ? 0 : Marshal.GetLastWin32Error();
         if (free) Native.UnregisterHotKey(hwnd, ProbeHotkeyId);
 
         if (hadMain) mainOn = Native.RegisterHotKey(hwnd, HotkeyId, mainMods | NoRepeat, mainVk);
         if (hadNote) noteOn = Native.RegisterHotKey(hwnd, NoteHotkeyId, NoteMods | NoRepeat, NoteVk);
         if (hadNext) nextOn = Native.RegisterHotKey(hwnd, NextHotkeyId, nextMods | NoRepeat, nextVk);
         if (hadInsert) insertOn = Native.RegisterHotKey(hwnd, InsertHotkeyId, insertMods | NoRepeat, insertVk);
+        // Debug level: probes fire on every keystroke in the chord field. Verbose mode only.
+        Diag.Debug("hotkey", "probe",
+            ("chord", HotkeyText.Describe(mods, vk)), ("free", free), ("win32", err),
+            ("restored_main", mainOn), ("restored_note", noteOn),
+            ("restored_next", nextOn), ("restored_insert", insertOn));
         return free;
     }
 
@@ -256,14 +281,18 @@ sealed class ClipboardWatcher
         // Our own copies, and entries that password managers mark private.
         if (Native.IsClipboardFormatAvailable(SelfId) || Native.IsClipboardFormatAvailable(ExcludeFormat)
             || Native.IsClipboardFormatAvailable(ViewerIgnoreFormat) || Excluded(owner)) return;
+        Exception? last = null;
         for (int attempt = 0; attempt < 5; attempt++)
         {
             try { Capture(); return; }
             catch (Exception e) when (e is ExternalException or IOException)
             {
+                last = e;
                 Thread.Sleep(60); // someone else has the clipboard open
             }
         }
+        Diag.Warn("clipboard.capture", "all retries failed, clipboard locked",
+            ("attempts", 5), ("error", last?.GetType().Name ?? "unknown"));
     }
 
     void Capture()
@@ -323,7 +352,11 @@ sealed class ClipboardWatcher
                 .Distinct(StringComparer.OrdinalIgnoreCase).Take(24).ToList();
             return list.Count == 0 ? null : list;
         }
-        catch (Exception e) when (e is ExternalException or IOException or UnauthorizedAccessException) { return null; }
+        catch (Exception e) when (e is ExternalException or IOException or UnauthorizedAccessException)
+        {
+            Diag.Debug("clipboard.capture", "format list unavailable", ("error", e.GetType().Name));
+            return null;
+        }
     }
 
     static string? Rich(TextDataFormat format)
@@ -342,7 +375,10 @@ sealed class ClipboardWatcher
             foreach (var f in formats)
                 if (ImageFormats.TryMatch(f, out _)) return true;
         }
-        catch (ExternalException) { }
+        catch (ExternalException e)
+        {
+            Diag.Debug("clipboard.capture", "raw image probe failed", ("error", e.GetType().Name));
+        }
         return false;
     }
 
@@ -357,36 +393,59 @@ sealed class ClipboardWatcher
 
     static CapturedImage? ReadImage()
     {
+        string[] formats = Array.Empty<string>();
+        string flavours = "";
         try
         {
-            var formats = Clipboard.GetDataObject()?.GetFormats(false) ?? Array.Empty<string>();
+            formats = Clipboard.GetDataObject()?.GetFormats(false) ?? Array.Empty<string>();
+            flavours = string.Join(",", formats.Take(12));
             string? id = ImageFormats.Best(formats, out string? readFormat);
             if (id != null && readFormat != null && Clipboard.GetData(readFormat) is MemoryStream stream)
             {
                 var bytes = stream.ToArray();
                 if (bytes.Length > 0 && bytes.Length <= MaxImageBytes
                     && Decode(new MemoryStream(bytes)) is { } exact)
+                {
+                    Diag.Info("clipboard.capture", "image native format",
+                        ("fmt", id), ("bytes", bytes.Length), ("flavours", flavours));
                     return new CapturedImage { Bitmap = exact, Bytes = bytes, FormatId = id };
+                }
+                Diag.Warn("clipboard.capture", "native image rejected",
+                    ("fmt", id ?? "none"), ("bytes", bytes.Length), ("limit", MaxImageBytes));
             }
         }
         catch (Exception e) when (e is ExternalException or IOException or UnauthorizedAccessException)
         {
-            // fall through to the GDI+ conversion
+            Diag.Warn("clipboard.capture", "native image read threw, falling back",
+                ("error", e.GetType().Name), ("flavours", flavours));
         }
 
         // CF_DIB and friends have no file header, or the format is one WPF cannot decode. A
         // lossless PNG conversion keeps the pixels (and still restores the image on paste).
+        // This is the ONLY source of history images with ImageFormat=null — worth logging.
         try
         {
             using var img = Forms.Clipboard.GetImage();
-            if (img == null) return null;
+            if (img == null)
+            {
+                Diag.Warn("clipboard.capture", "GDI+ returned no image", ("flavours", flavours));
+                return null;
+            }
             var ms = new MemoryStream();
             img.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-            if (Decode(ms) is not { } converted) return null;
+            if (Decode(ms) is not { } converted)
+            {
+                Diag.Warn("clipboard.capture", "converted PNG undecodable");
+                return null;
+            }
+            Diag.Info("clipboard.capture", "image fallback to PNG (FormatId=null)",
+                ("reason", "no usable native image file"), ("flavours", flavours),
+                ("hint", "legacy history with null ImageFormat is PNG on disk"));
             return new CapturedImage { Bitmap = converted, Bytes = null, FormatId = null };
         }
         catch (Exception e) when (e is ExternalException or IOException or System.ComponentModel.Win32Exception)
         {
+            Diag.Warn("clipboard.capture", "GDI+ fallback failed", ("error", e.GetType().Name));
             return null;
         }
     }
@@ -402,6 +461,7 @@ sealed class ClipboardWatcher
         }
         catch (Exception e) when (e is NotSupportedException or FileFormatException or IOException or ArgumentException)
         {
+            Diag.Debug("clipboard.capture", "WIC decode failed", ("error", e.GetType().Name));
             return null;
         }
     }

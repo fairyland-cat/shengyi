@@ -19,7 +19,7 @@ sealed class RevealController
     readonly Func<IReadOnlyList<LineWindow>> windows;
     readonly Func<bool> edgeEnabled;
     readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromMilliseconds(30) };
-    bool armed = true, lastButton;
+    bool armed = true, lastButton, lastAtEdge;
     DateTime? edgeSince, outsideSince;
     LineWindow? edgeWindow;
 
@@ -79,7 +79,11 @@ sealed class RevealController
         {
             if (HoldOpen > 0) { outsideSince = null; return; }
             if (open.KeyboardMode) return; // closes on Esc, a pick, or losing focus
-            if (FullScreen.Covers(open.Screen)) { RetractAll(); return; }
+            if (FullScreen.Covers(open.Screen))
+            {
+                Diag.Throttled("reveal:retract:fullscreen", "reveal", "open line retracted by fullscreen");
+                RetractAll(); return;
+            }
             bool inside = open.HoverZoneContains(p);
             if (click && !inside) { RetractAll(); return; }
             if (inside) { outsideSince = null; return; }
@@ -92,13 +96,38 @@ sealed class RevealController
         bool atEdge = here != null
             && p.Y <= here.Screen.Bounds.Top + Math.Max(2, EdgeDepth * here.Scale)
             && p.X < here.Screen.Bounds.Right - CloseButtonCorner * here.Scale;
-        if (!atEdge) { armed = true; edgeSince = null; return; }
-        if (!edgeEnabled() || !armed || button || FullScreen.Covers(here!.Screen)) { edgeSince = null; return; }
+        // The explicit null test also tells the compiler that `here` is non-null below.
+        if (!atEdge || here is null)
+        {
+            armed = true; edgeSince = null;
+            if (lastAtEdge) { Diag.Debug("reveal", "left top-edge strip"); lastAtEdge = false; }
+            return;
+        }
+        // Only state changes, never the 30 ms tick itself. That would be ~2.8M lines a day.
+        if (!lastAtEdge)
+        {
+            Diag.Debug("reveal", "entered top-edge strip",
+                ("screen", here.Screen.DeviceName), ("x", p.X), ("y", p.Y));
+            lastAtEdge = true;
+        }
+        bool allowed = edgeEnabled() && armed && !button && !FullScreen.Covers(here.Screen);
+        if (!allowed)
+        {
+            string reason = !edgeEnabled() ? "setting_off"
+                : !armed ? "armed_false" : button ? "mouse_button" : "fullscreen";
+            Diag.Throttled(DiagLevel.Info, "reveal:veto:" + reason, 60, "reveal",
+                "edge reveal vetoed", ("reason", reason), ("x", p.X), ("y", p.Y),
+                ("bounds", here.Screen.Bounds.ToString()), ("scale", here.Scale));
+            edgeSince = null; return;
+        }
         if (edgeWindow != here || edgeSince == null) { edgeWindow = here; edgeSince = now; return; }
         if (now - edgeSince >= Dwell)
         {
             edgeSince = null;
             PasteTarget = IntPtr.Zero;
+            Diag.Info("reveal", "dwell reached, showing line",
+                ("screen", here.Screen.DeviceName), ("dwell_ms", Dwell.TotalMilliseconds),
+                ("scale", here.Scale));
             here.Reveal(keyboard: false);
         }
     }
@@ -107,6 +136,8 @@ sealed class RevealController
 // The line stays away while something is full screen (games, videos, presentations).
 static class FullScreen
 {
+    static int lastQuns = -1;
+
     public static bool Covers(Forms.Screen screen)
     {
         // SHQueryUserNotificationState is system-wide, not per monitor. Only QUNS_RUNNING_D3D_FULL_SCREEN
@@ -116,7 +147,26 @@ static class FullScreen
         // suppress the top-edge reveal everywhere for no reason (the classic "it stopped working on my
         // ThinkPad" symptom). A real full-screen window — video player, PowerPoint slide show — is still
         // caught by the foreground-rect check below.
-        if (Native.SHQueryUserNotificationState(out var state) == 0 && state == 3) return true;
+        int hr = Native.SHQueryUserNotificationState(out var state);
+        if (hr == 0 && state == 3)
+        {
+            Diag.Throttled(DiagLevel.Info, "reveal:quns:3", 60, "reveal",
+                "fullscreen suppression by QUNS", ("quns", state),
+                ("hint", "QUNS_RUNNING_D3D_FULL_SCREEN"));
+            lastQuns = state;
+            return true;
+        }
+        if (hr == 0 && state != lastQuns)
+        {
+            Diag.Debug("reveal", "QUNS state changed", ("from", lastQuns), ("to", state), ("hr", hr));
+            lastQuns = state;
+        }
+        // Record the exact states that used to be misread as fullscreen. This line is what makes
+        // "top edge stopped working on my laptop" a one-glance diagnosis.
+        if (hr == 0 && state is 2 or 4)
+            Diag.Throttled(DiagLevel.Info, "reveal:quns:ignored:" + state, 60, "reveal",
+                "QUNS busy/presentation ignored (not a suppression reason)", ("quns", state),
+                ("hint", "0.9.2 and earlier suppressed these spuriously on docked laptops"));
 
         var fg = Native.GetForegroundWindow();
         if (fg == IntPtr.Zero || fg == Native.GetShellWindow() || fg == Native.GetDesktopWindow()) return false;
@@ -127,6 +177,12 @@ static class FullScreen
         if (Native.IsZoomed(fg)) return false; // maximized isn't full screen
         if (!Native.GetWindowRect(fg, out var r)) return false;
         var b = screen.Bounds;
-        return r.Left <= b.Left && r.Top <= b.Top && r.Right >= b.Right && r.Bottom >= b.Bottom;
+        bool covers = r.Left <= b.Left && r.Top <= b.Top && r.Right >= b.Right && r.Bottom >= b.Bottom;
+        if (covers)
+            Diag.Throttled(DiagLevel.Info, "reveal:fgrext", 60, "reveal",
+                "fullscreen suppression by foreground rect",
+                ("class", cls.ToString()), ("rect", $"{r.Left},{r.Top},{r.Right},{r.Bottom}"),
+                ("bounds", b.ToString()));
+        return covers;
     }
 }

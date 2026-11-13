@@ -303,4 +303,22 @@ static class S
     public static string QuickInsertNoTarget => T("Open 绳忆 from the window you want to type into, then try quick insert again.", "请先从要输入的窗口里呼出 绳忆，再使用快速插入。");
     public static string QuickInsertNothing => T("No text clip to insert yet.", "还没有可以插入的文字内容。");
     public static string QuickInsertCopied => T("Copied (quick insert is set to copy only).", "已复制（快速插入当前设为仅复制）。");
+
+    // 0.10.0 · diagnostics
+    public static string SectionDiagnostics => T("Diagnostics", "诊断日志");
+    public static string DiagEnabledTitle => T("Diagnostic log", "诊断日志");
+    public static string DiagEnabledNote => T("Records errors and key events locally for troubleshooting.", "在本机记录错误与关键事件，用于排查问题。");
+    public static string DiagLevelTitle => T("Level", "记录级别");
+    public static string DiagLevelNote => T("Verbose adds high-frequency details; use it while reproducing a problem.", "详细模式包含高频细节，建议只在复现问题时开启。");
+    public static string DiagLevelErrors => T("Errors only", "仅错误");
+    public static string DiagLevelStandard => T("Errors + key events", "错误 + 关键事件");
+    public static string DiagLevelVerbose => T("Verbose", "详细");
+    public static string DiagClearTitle => T("Clear log", "清空日志");
+    public static string DiagPrivacyNote => T("No clipboard text, images or full paths are stored. Export from the tray menu; nothing is uploaded.",
+                                              "不记录剪贴板正文、图片或完整路径。可在托盘菜单导出，不会自动上传。");
+    public static string DiagClear => T("Clear", "清空");
+    public static string DiagCleared => T("Diagnostic log cleared.", "诊断日志已清空。");
+    public static string DiagExportMenu => T("Export diagnostics…", "导出诊断包…");
+    public static string DiagExportTitle => T("Save diagnostic bundle", "保存诊断包");
+    public static string DiagExportDone => T("Diagnostic bundle saved to {0}", "诊断包已保存到 {0}");
 }

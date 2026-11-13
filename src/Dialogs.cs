@@ -497,6 +497,20 @@ sealed class SettingsWindow : ChromeWindow
             noteIndex, i => S.NoteColorNames[i]);
         noteSwatches.Changed += i => Result.NoteColor = Theme.NotePresets[i];
 
+        // ---- 0.10.0 · diagnostics ---------------------------------------
+        var diagOn = new Toggle(Result.DiagnosticsEnabled);
+        diagOn.Changed += () => Result.DiagnosticsEnabled = diagOn.IsOn;
+        string[] diagIds = { "errors", "standard", "verbose" };
+        int diagIndex = Math.Max(0, Array.IndexOf(diagIds, Result.DiagnosticsLevel));
+        var diagLevel = new Segmented(diagIndex, S.DiagLevelErrors, S.DiagLevelStandard, S.DiagLevelVerbose);
+        diagLevel.Changed += () => Result.DiagnosticsLevel = diagIds[Math.Clamp(diagLevel.Selected, 0, 2)];
+        var diagClear = new Pill(S.DiagClear, false) { MinWidth = 96 };
+        diagClear.Click += () =>
+        {
+            Diag.Clear();
+            MessageBox.Show(S.DiagCleared, S.AppName, MessageBoxButton.OK, MessageBoxImage.Information);
+        };
+
         var left = new StackPanel();
         left.Children.Add(Card(S.SectionShortcut,
             Row(S.OpenClipboard, S.OpenClipboardNote, hotkeyBox),
@@ -551,6 +565,10 @@ sealed class SettingsWindow : ChromeWindow
             Stacked(S.PreviewTitle, S.PreviewNote, preview))));
         right.Children.Add(Spaced(Card(S.SectionSticky,
             Stacked(S.NoteColorTitle, S.NoteColorNote, noteSwatches))));
+        right.Children.Add(Spaced(Card(S.SectionDiagnostics,
+            Row(S.DiagEnabledTitle, S.DiagEnabledNote, diagOn),
+            Row(S.DiagLevelTitle, S.DiagLevelNote, diagLevel),
+            Row(S.DiagClearTitle, S.DiagPrivacyNote, diagClear))));
 
         var columns = new Grid { Margin = new Thickness(36, 0, 36, 0) };
         columns.ColumnDefinitions.Add(new ColumnDefinition());

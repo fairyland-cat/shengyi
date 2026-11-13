@@ -60,12 +60,20 @@ sealed class Actions
         // WinForms' clipboard, not WPF's: WPF's SetDataObject fails on some machines (CLIPBRD_E_CANT_OPEN / E_NOTIMPL).
         var data = new Forms.DataObject();
         data.SetData(ClipboardWatcher.SelfFormat, new MemoryStream(new byte[] { 1 })); // so we don't record it again
+        var clock = Stopwatch.StartNew();
+        var staged = new List<string>();
         switch (item.Kind)
         {
             case ClipKind.Image:
                 byte[] bytes;
                 try { bytes = File.ReadAllBytes(item.ImagePath!); }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    Diag.Warn("clipboard.copy", "image file unreadable",
+                        ("fmt", item.ImageFormat ?? "null"), ("path_ext", Diag.PathShape(item.ImagePath)),
+                        ("error", e.GetType().Name));
+                    return false;
+                }
                 bool placed = false;
                 // CF_BITMAP (and the CF_DIB it implies) is the flavour every desktop app
                 // understands: Office, Paint, old editors. We always set it via GDI+, which
@@ -76,8 +84,14 @@ sealed class Actions
                     using var bmp = new System.Drawing.Bitmap(ms);
                     data.SetImage(bmp);
                     placed = true;
+                    staged.Add("CF_BITMAP");
                 }
-                catch (Exception e) when (e is ArgumentException or ExternalException or IOException) { }
+                catch (Exception e) when (e is ArgumentException or ExternalException or IOException)
+                {
+                    Diag.Warn("clipboard.copy", "GDI+ decode failed, CF_BITMAP unavailable",
+                        ("fmt", item.ImageFormat ?? "null"), ("bytes", bytes.Length),
+                        ("error", e.GetType().Name));
+                }
 
                 // Standard MIME names that browsers, Electron apps (DingTalk/钉钉, Slack, web
                 // editors) and most modern programs require. Without these the clipboard only
@@ -85,6 +99,7 @@ sealed class Actions
                 // web page silently did nothing. null / unknown history is legacy PNG on disk
                 // (ImageFormats.Extension); WebP has no GDI+ decoder and is transcoded to PNG.
                 byte[] mimeBytes = bytes;
+                bool transcoded = false;
                 string? mime = item.ImageFormat switch
                 {
                     ImageFormats.Png => "image/png",
@@ -97,12 +112,15 @@ sealed class Actions
                 if (mime == null) // WebP only: decode via WIC and re-emit as PNG
                 {
                     var png = TranscodeToPng(bytes);
-                    if (png != null) { mime = "image/png"; mimeBytes = png; }
+                    if (png != null) { mime = "image/png"; mimeBytes = png; transcoded = true; }
+                    else Diag.Warn("clipboard.copy", "WebP to PNG transcode failed",
+                        ("bytes", bytes.Length), ("fmt", "webp"));
                 }
                 if (mime != null)
                 {
                     data.SetData(mime, true, new MemoryStream(mimeBytes));
                     placed = true;
+                    staged.Add(mime);
                 }
                 // Bonus: the original on-disk format (exact bytes; GIF animation). Skipped when it
                 // duplicates the standard MIME key already written above, so the universal flavours
@@ -112,20 +130,35 @@ sealed class Actions
                 {
                     data.SetData(native, false, new MemoryStream(bytes));
                     placed = true;
+                    staged.Add(native);
                 }
+                // The single most useful line when a paste into 钉钉 / a web page does nothing:
+                // it shows exactly which clipboard flavours WE offered, without any image bytes.
+                Diag.Info("clipboard.copy", "image formats staged",
+                    ("fmt", item.ImageFormat ?? "null"), ("path_ext", Diag.PathShape(item.ImagePath)),
+                    ("bytes", bytes.Length), ("transcoded", transcoded),
+                    ("standard_mime", mime ?? "none"),
+                    ("formats", string.Join(",", staged)), ("ok", placed));
                 if (!placed) return false;
                 break;
             case ClipKind.Files:
                 var files = new StringCollection();
                 foreach (var f in item.Files ?? new())
                     if (File.Exists(f) || Directory.Exists(f)) files.Add(f);
-                if (files.Count == 0) return false;
+                if (files.Count == 0)
+                {
+                    Diag.Warn("clipboard.copy", "no existing files in file clip",
+                        ("count", (item.Files ?? new()).Count));
+                    return false;
+                }
                 data.SetFileDropList(files);
+                staged.Add("FileDrop");
                 break;
             default:
                 data.SetText(string.IsNullOrEmpty(item.Text) ? " " : item.Text, Forms.TextDataFormat.UnicodeText);
-                if (!plain && !string.IsNullOrEmpty(item.Html)) data.SetText(item.Html, Forms.TextDataFormat.Html);
-                if (!plain && !string.IsNullOrEmpty(item.Rtf)) data.SetText(item.Rtf, Forms.TextDataFormat.Rtf);
+                staged.Add("UnicodeText");
+                if (!plain && !string.IsNullOrEmpty(item.Html)) { data.SetText(item.Html, Forms.TextDataFormat.Html); staged.Add("Html"); }
+                if (!plain && !string.IsNullOrEmpty(item.Rtf)) { data.SetText(item.Rtf, Forms.TextDataFormat.Rtf); staged.Add("Rtf"); }
                 break;
         }
         try
@@ -134,9 +167,20 @@ sealed class Actions
             // Paste(), the item menu and "Save and copy" all come through here, so one call site
             // covers every take without counting a paste twice.
             store.RecordUse(item);
+            Diag.Info("clipboard.copy", "clipboard set",
+                ("kind", item.Kind.ToString()), ("formats", string.Join(",", staged)),
+                ("format_count", staged.Count),
+                ("ok", 1), ("ms", clock.ElapsedMilliseconds));
             return true;
         }
-        catch (ExternalException) { return false; }
+        catch (ExternalException e)
+        {
+            Diag.Warn("clipboard.copy", "SetDataObject failed",
+                ("kind", item.Kind.ToString()), ("formats", string.Join(",", staged)),
+                ("error", e.GetType().Name), ("ms", clock.ElapsedMilliseconds),
+                ("hint", "CLIPBRD_E_CANT_OPEN: clipboard held by another app"));
+            return false;
+        }
     }
 
     // WebP (and any format System.Drawing cannot decode) → PNG via WIC, so the universal
@@ -147,14 +191,23 @@ sealed class Actions
         {
             using var msIn = new MemoryStream(bytes);
             var decoder = BitmapDecoder.Create(msIn, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
-            if (decoder.Frames.Count == 0) return null;
+            if (decoder.Frames.Count == 0)
+            {
+                Diag.Warn("clipboard.copy", "WIC decoded zero frames", ("bytes", bytes.Length));
+                return null;
+            }
             using var msOut = new MemoryStream();
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(decoder.Frames[0]);
             encoder.Save(msOut);
             return msOut.ToArray();
         }
-        catch { return null; }
+        catch (Exception e)
+        {
+            Diag.Warn("clipboard.copy", "WIC transcode threw",
+                ("bytes", bytes.Length), ("error", e.GetType().Name));
+            return null;
+        }
     }
 
     IntPtr TargetWindow() => reveal.PasteTarget != IntPtr.Zero ? reveal.PasteTarget : Native.GetForegroundWindow();
@@ -163,17 +216,34 @@ sealed class Actions
     public async void Paste(ClipItem item, bool plain)
     {
         var target = TargetWindow();
-        if (!Copy(item, plain)) return;
+        if (!Copy(item, plain))
+        {
+            Diag.Warn("paste", "copy failed, paste aborted", ("kind", item.Kind.ToString()));
+            return;
+        }
         reveal.RetractAll();
+        Diag.Info("paste", "delivering", ("has_target", target != IntPtr.Zero), ("own", Native.IsOwn(target)));
         await PasteInto(target);
     }
 
     // Shared by a single paste, merge paste and each step of a sequence.
     public async Task PasteInto(IntPtr target)
     {
-        if (target == IntPtr.Zero || Native.IsOwn(target)) return;
+        if (target == IntPtr.Zero || Native.IsOwn(target))
+        {
+            Diag.Warn("paste", "no valid target window",
+                ("zero", target == IntPtr.Zero), ("own", Native.IsOwn(target)));
+            return;
+        }
         Native.ForceForeground(target);
         await Task.Delay(90);
+        // The 90 ms settle is the difference between typing into the target and into a line
+        // window that is still closing. Record whether it actually worked.
+        bool match = Native.GetForegroundWindow() == target;
+        bool ownStill = Native.IsOwn(Native.GetForegroundWindow());
+        Diag.Info("paste", "focus settled",
+            ("foreground_match", match), ("own_still", ownStill),
+            ("target_app", settings().RecordSourceApp ? Native.ProcessName(target) ?? "unknown" : "disabled"));
         // Shift is usually still held (Shift+click, Shift+Enter); Ctrl+Shift+V would mean something else.
         foreach (ushort vk in new ushort[] { 0x10, 0x11 })
             if (Native.KeyDown(vk)) Native.SendKeys((vk, true));
@@ -210,7 +280,12 @@ sealed class Actions
         data.SetData(ClipboardWatcher.SelfFormat, new MemoryStream(new byte[] { 1 }));
         data.SetText(result.Text, Forms.TextDataFormat.UnicodeText);
         try { Forms.Clipboard.SetDataObject(data, true, 10, 50); }
-        catch (ExternalException) { return; }
+        catch (ExternalException e)
+        {
+            Diag.Warn("merge", "SetDataObject failed",
+                ("used", result.Used), ("error", e.GetType().Name));
+            return;
+        }
 
         foreach (var item in items) store.RecordUse(item);
         var target = TargetWindow();
@@ -301,11 +376,20 @@ sealed class Actions
         // "latest text". RetractAll() clears IsOut and would lose that context.
         var item = chosen ?? PickInsertItem();
         if (fromLine && (target == IntPtr.Zero || !Native.IsWindow(target)))
-        { Notify?.Invoke(S.QuickInsertNoTarget); return; }
-        if (item == null || string.IsNullOrEmpty(item.Text)) { Notify?.Invoke(S.QuickInsertNothing); return; }
+        {
+            Diag.Warn("quickinsert", "no target window", ("zero", target == IntPtr.Zero), ("from_line", fromLine));
+            Notify?.Invoke(S.QuickInsertNoTarget); return;
+        }
+        if (item == null || string.IsNullOrEmpty(item.Text))
+        {
+            Diag.Debug("quickinsert", "no text clip available");
+            Notify?.Invoke(S.QuickInsertNothing); return;
+        }
         if (settings().QuickInsertCopyOnly)
         {
-            if (Copy(item, true)) Notify?.Invoke(S.QuickInsertCopied);
+            bool ok = Copy(item, true);
+            if (ok) Notify?.Invoke(S.QuickInsertCopied);
+            Diag.Info("quickinsert", "copy-only fallback", ("ok", ok), ("chars", item.Text.Length));
             return;
         }
         if (fromLine) reveal.RetractAll(); // hands focus back to the window we were typing in
@@ -317,12 +401,19 @@ sealed class Actions
         if (target != IntPtr.Zero) Native.ForceForeground(target);
         await Task.Delay(90);
         if (Native.IsOwn(Native.GetForegroundWindow()))
-        { Notify?.Invoke(S.QuickInsertNoTarget); return; }
+        {
+            Diag.Warn("quickinsert", "foreground still ours after 90ms, injection aborted",
+                ("from_line", fromLine), ("has_target", target != IntPtr.Zero));
+            Notify?.Invoke(S.QuickInsertNoTarget); return;
+        }
         // A still-held Ctrl/Alt/Shift would turn the injected characters into shortcuts.
         // PasteInto() releases the same keys before simulating Ctrl+V.
         foreach (ushort vk in new ushort[] { 0x10, 0x11, 0x12 })
             if (Native.KeyDown(vk)) Native.SendKeys((vk, true));
         Native.SendUnicode(item.Text!);
+        Diag.Info("quickinsert", "unicode injected", ("chars", item.Text!.Length),
+            ("source", fromLine ? "line" : "global"),
+            ("search_hit", fromLine && reveal.ActiveKeyboardWindow?.KeyboardMode == true));
     }
 
     ClipItem? PickInsertItem()
@@ -371,7 +462,12 @@ sealed class Actions
         if (item.Kind == ClipKind.Image)
         {
             try { Process.Start(new ProcessStartInfo("mspaint.exe", $"\"{item.ImagePath}\"") { UseShellExecute = true }); }
-            catch (System.ComponentModel.Win32Exception) { Shell(item.ImagePath!, "edit"); }
+            catch (System.ComponentModel.Win32Exception e)
+            {
+                Diag.Debug("item.edit", "mspaint unavailable, falling back to shell edit",
+                    ("error", e.GetType().Name));
+                Shell(item.ImagePath!, "edit");
+            }
         }
         else if (item.Kind == ClipKind.Files) ShowInFolder(item);
         else if (item.IsSticky) Front(new StickyEditWindow(item, store, this, false));
@@ -432,7 +528,12 @@ sealed class Actions
             if (image) File.Copy(item.ImagePath!, dlg.FileName, true);
             else File.WriteAllText(dlg.FileName, item.Text ?? "");
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Diag.Warn("item.saveas", "write failed",
+                ("path_ext", Diag.PathShape(dlg.FileName)), ("image", image),
+                ("error", e.GetType().Name));
+        }
     }
 
     // Text drags as text; images drag as a file with a readable name (plus the bitmap); files as themselves.
@@ -477,7 +578,12 @@ sealed class Actions
             File.Copy(item.ImagePath!, dest, true);
             return dest;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Diag.Warn("item.drag", "temp image copy failed",
+                ("path_ext", Diag.PathShape(item.ImagePath)), ("error", e.GetType().Name));
+            return null;
+        }
     }
 
     public void ShowMenu(ClipItem item, CardView view)
@@ -549,6 +655,11 @@ sealed class Actions
     static void Shell(string path, string? verb = null)
     {
         try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true, Verb = verb ?? "" }); }
-        catch (System.ComponentModel.Win32Exception) { }
+        catch (System.ComponentModel.Win32Exception e)
+        {
+            Diag.Warn("item.shell", "shell launch failed",
+                ("path_ext", Diag.PathShape(path)), ("verb", verb ?? "open"),
+                ("error", e.GetType().Name));
+        }
     }
 }
