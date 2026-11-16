@@ -32,6 +32,9 @@ sealed class Actions
     readonly DispatcherTimer seqTimer = new();
     IntPtr seqTarget;
     bool seqAuto, seqCopyOnly;
+    // 0.11.0 · bumped on every start/stop so an in-flight 90 ms paste from a cancelled
+    // sequence cannot deliver a stray Ctrl+V after Esc.
+    int seqToken;
 
     public event Action? MultiChanged;
     public event Action? SequenceChanged;
@@ -204,9 +207,24 @@ sealed class Actions
         }
         catch (Exception e)
         {
-            Diag.Warn("clipboard.copy", "WIC transcode threw",
-                ("bytes", bytes.Length), ("error", e.GetType().Name));
-            return null;
+            // 0.11.0 · WIC may lack a WebP decoder on pre-1809 / N edition Windows. Try GDI+
+            // once more (it may have a codec WIC does not), still emitting a standard PNG MIME.
+            try
+            {
+                using var ms = new MemoryStream(bytes);
+                using var bmp = new System.Drawing.Bitmap(ms);
+                using var png = new MemoryStream();
+                bmp.Save(png, System.Drawing.Imaging.ImageFormat.Png);
+                Diag.Warn("clipboard.copy", "WIC failed, GDI+ fallback used",
+                    ("bytes", bytes.Length), ("error", e.GetType().Name));
+                return png.ToArray();
+            }
+            catch
+            {
+                Diag.Warn("clipboard.copy", "WebP transcode impossible on this Windows",
+                    ("bytes", bytes.Length), ("wic", e.GetType().Name));
+                return null;
+            }
         }
     }
 
@@ -226,8 +244,10 @@ sealed class Actions
         await PasteInto(target);
     }
 
-    // Shared by a single paste, merge paste and each step of a sequence.
-    public async Task PasteInto(IntPtr target)
+    // Shared by a single paste, merge paste and each step of a sequence. seqToken, when >= 0,
+    // is the sequence generation captured before the settle delay; a mismatch means Esc or a
+    // new sequence happened in between and this delivery must be dropped.
+    public async Task PasteInto(IntPtr target, int seqToken = -1)
     {
         if (target == IntPtr.Zero || Native.IsOwn(target))
         {
@@ -237,6 +257,11 @@ sealed class Actions
         }
         Native.ForceForeground(target);
         await Task.Delay(90);
+        if (seqToken >= 0 && !PasteGuard.TokenStillValid(seqToken, this.seqToken))
+        {
+            Diag.Info("paste", "cancelled paste dropped", ("token", seqToken), ("now", this.seqToken));
+            return;
+        }
         // The 90 ms settle is the difference between typing into the target and into a line
         // window that is still closing. Record whether it actually worked.
         bool match = Native.GetForegroundWindow() == target;
@@ -244,10 +269,24 @@ sealed class Actions
         Diag.Info("paste", "focus settled",
             ("foreground_match", match), ("own_still", ownStill),
             ("target_app", settings().RecordSourceApp ? Native.ProcessName(target) ?? "unknown" : "disabled"));
+        // Never send a chord into a higher-integrity window: UIPI drops it silently and the user
+        // would see a false "pasted" message. Copy-only fallback keeps the clip usable.
+        if (!match || ownStill)
+        {
+            Diag.Warn("paste", "foreground lost, copy-only fallback",
+                ("foreground_match", match), ("own_still", ownStill));
+            Notify?.Invoke(S.PasteCopyOnly);
+            return;
+        }
         // Shift is usually still held (Shift+click, Shift+Enter); Ctrl+Shift+V would mean something else.
         foreach (ushort vk in new ushort[] { 0x10, 0x11 })
             if (Native.KeyDown(vk)) Native.SendKeys((vk, true));
-        Native.SendKeys((0x11, false), (0x56, false), (0x56, true), (0x11, true));
+        uint injected = Native.SendKeys((0x11, false), (0x56, false), (0x56, true), (0x11, true));
+        if (PasteGuard.NeedCopyOnlyFallback(injected, match, ownStill))
+        {
+            Diag.Warn("paste", "Ctrl+V injection refused, copy-only fallback", ("injected", injected));
+            Notify?.Invoke(S.PasteCopyOnly);
+        }
     }
 
     // ---- multi selection -----------------------------------------------------
@@ -307,6 +346,7 @@ sealed class Actions
         // that silently cannot be advanced because the user never enabled the shortcut.
         if (!auto && !settings().SequenceHotkeyEnabled) { Notify?.Invoke(S.SequenceNeedHotkey); return; }
         seqTimer.Stop();
+        seqToken++;                 // invalidate anything in flight from a previous queue
         sequence.Clear();
         foreach (var item in items) sequence.Enqueue(item);
         seqAuto = auto;
@@ -344,7 +384,8 @@ sealed class Actions
         }
         var item = sequence.Dequeue();
         bool copied = Copy(item, false);
-        if (copied && !seqCopyOnly) _ = PasteInto(seqTarget);
+        int captured = seqToken;
+        if (copied && !seqCopyOnly) _ = PasteInto(seqTarget, captured);
         if (sequence.Count == 0)
         {
             StopSequence(notify: false);
@@ -357,6 +398,7 @@ sealed class Actions
     {
         bool wasActive = SequenceActive;
         seqTimer.Stop();
+        seqToken++;                 // Esc / new action: any paste waiting on its 90 ms delay is void
         sequence.Clear();
         SequenceChanged?.Invoke();
         if (notify && wasActive) Notify?.Invoke(S.SequenceStopped);

@@ -76,8 +76,10 @@ static class SmartTags
         return tags.FirstOrDefault();
     }
 
-    const RegexOptions O = RegexOptions.CultureInvariant;
-    const RegexOptions Oi = RegexOptions.CultureInvariant | RegexOptions.IgnoreCase;
+    // 0.11.0 · precompiled once at startup: these 15 regexes run on every captured clip and on
+    // every history item at load. Interpreted mode was a measurable part of the cold-open stall.
+    const RegexOptions O = RegexOptions.CultureInvariant | RegexOptions.Compiled;
+    const RegexOptions Oi = RegexOptions.CultureInvariant | RegexOptions.IgnoreCase | RegexOptions.Compiled;
 
     static readonly Regex PhoneRx = new(@"(?<!\d)(1[3-9]\d)[\s-]?(\d{4})[\s-]?(\d{4})(?!\d)", O);
     static readonly Regex EmailRx = new(@"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![A-Za-z0-9-])", O);

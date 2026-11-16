@@ -188,9 +188,17 @@ sealed class ClipStore : IDisposable
 
     // Smart tags are derived, never authoritative: clips.json is still the only source of truth.
     // Turning recognition off removes only the tags we generated, leaving any unknown/manual ones.
-    void Retag(ClipItem item)
+    void Retag(ClipItem item) => Retag(item, force: false);
+
+    void Retag(ClipItem item, bool force)
     {
-        if (settings().SmartTagging) item.Tags = SmartTags.Analyze(item);
+        if (settings().SmartTagging)
+        {
+            // 0.11.0 · tags are persisted in clips.json. Re-analysing every item on each launch
+            // (up to MaxItems × 15 regexes) was a measurable cold-open stall. Only recompute for
+            // legacy clips that have no Tags field yet, or when a caller explicitly forces it.
+            if (force || item.Tags == null) item.Tags = SmartTags.Analyze(item);
+        }
         else if (item.Tags != null)
         {
             var rest = item.Tags.Where(t => !SmartTags.IsKnown(t)).ToList();
@@ -201,7 +209,7 @@ sealed class ClipStore : IDisposable
     // Recompute tags for history that predates the feature, and right after the setting changes.
     public void RefreshTags()
     {
-        foreach (var item in Items) Retag(item);
+        foreach (var item in Items) Retag(item, force: true);
         Version++;                 // tags are part of the indexed metadata
         ScheduleSave();
     }
@@ -423,9 +431,12 @@ sealed class ClipStore : IDisposable
     {
         try
         {
-            var list = JsonSerializer.Deserialize<List<ClipItem>>(File.ReadAllText(IndexPath));
+            // 0.11.0 · read element-by-element: one malformed clip no longer empties the whole
+            // history. Good clips survive even when an old entry has a broken field type.
+            var list = new List<ClipItem>();
+            var (_, skipped) = JsonRobust.MergeList(File.ReadAllText(IndexPath), list);
             bool enriched = false;
-            foreach (var item in list ?? new())
+            foreach (var item in list)
             {
                 if (item.Kind == ClipKind.Image && !File.Exists(item.ImagePath)) continue;
                 // History saved before v0.5.0 gets recognised too, without changing its order.
@@ -439,19 +450,27 @@ sealed class ClipStore : IDisposable
                 }
                 Items.Add(item);
             }
+            if (skipped > 0)
+            {
+                Settings.LoadRecovered = true;
+                Diag.Warn("history", "bad clips skipped", ("count", skipped), ("kept", Items.Count));
+            }
             if (enriched) ScheduleSave();
         }
-        catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { }
+        catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException)
+        {
+            // Whole file unreadable: keep a copy for manual recovery, then start clean.
+            Settings.LoadRecovered = AtomicFile.Quarantine(IndexPath, DateTime.UtcNow);
+            try { Diag.Warn("history", "file unreadable, quarantined", ("recovered", Settings.LoadRecovered), ("error", e.GetType().Name)); }
+            catch { /* logging must never break startup */ }
+        }
     }
 
     void Save()
     {
         try
         {
-            Directory.CreateDirectory(Root);
-            var tmp = IndexPath + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(Items.ToList()));
-            File.Move(tmp, IndexPath, true);
+            AtomicFile.WriteText(IndexPath, JsonSerializer.Serialize(Items.ToList()));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }

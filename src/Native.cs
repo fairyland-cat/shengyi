@@ -88,12 +88,14 @@ static class Native
     [StructLayout(LayoutKind.Sequential)] struct INPUT { public uint type; public InputUnion u; }
     [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint count, INPUT[] inputs, int size);
 
-    public static void SendKeys(params (ushort vk, bool up)[] keys)
+    // Returns the number of events actually injected. UIPI refuses injection into a higher-
+    // integrity (admin) window and SendInput then returns 0 — callers must fall back to copy-only.
+    public static uint SendKeys(params (ushort vk, bool up)[] keys)
     {
         var inputs = new INPUT[keys.Length];
         for (int i = 0; i < keys.Length; i++)
             inputs[i] = new INPUT { type = 1, u = new InputUnion { ki = new KEYBDINPUT { wVk = keys[i].vk, dwFlags = keys[i].up ? 2u : 0u } } };
-        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
     }
 
     const uint KEYEVENTF_KEYUP = 0x0002, KEYEVENTF_UNICODE = 0x0004;
@@ -102,10 +104,11 @@ static class Native
     // the clipboard. With KEYEVENTF_UNICODE, wVk must be 0 and wScan carries the UTF-16 unit;
     // this also works for Chinese text, independent of the active keyboard layout. Long strings
     // go in chunks so a single SendInput call never grows unreasonably large.
-    public static void SendUnicode(string text)
+    public static uint SendUnicode(string text)
     {
-        if (string.IsNullOrEmpty(text)) return;
+        if (string.IsNullOrEmpty(text)) return 0;
         const int Chunk = 64;
+        uint sent = 0;
         for (int start = 0; start < text.Length; start += Chunk)
         {
             int n = Math.Min(Chunk, text.Length - start);
@@ -124,9 +127,15 @@ static class Native
                     u = new InputUnion { ki = new KEYBDINPUT { wVk = 0, wScan = c, dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP } },
                 };
             }
-            SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+            uint got = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+            sent += got;
+            if (got != inputs.Length) break; // UIPI refusal or a bad target: stop, don't type half a clip
         }
+        return sent;
     }
+
+    // ForceForeground returned void before 0.11.0: a cross-integrity target could not be focused
+    // yet Ctrl+V was sent anyway. Callers now check the real foreground after the settle delay.
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     static extern int SHGetKnownFolderPath([MarshalAs(UnmanagedType.LPStruct)] Guid id, uint flags, IntPtr token, out IntPtr path);

@@ -50,8 +50,11 @@ sealed class LineWindow : Window
     readonly Path rope;
     // Reused brush + stop pool: scrolling only mutates offsets/colours, never allocates.
     readonly LinearGradientBrush ropePaint = new() { MappingMode = BrushMappingMode.Absolute };
+    // 0.11.0 · the fade mask was rebuilt (brush + 4 stops) every frame; pool both and mutate.
+    readonly LinearGradientBrush fadePaint = new() { MappingMode = BrushMappingMode.Absolute, StartPoint = new Point(0, 0), EndPoint = new Point(1, 0) };
+    readonly GradientStop[] fadeStops = { new(), new(), new(), new() };
     double lastGradientOffset = double.NaN;
-    bool gradientActive;
+    bool gradientActive, fadeReady;
     readonly Border hint, searchBar, tabBar, helpBar;
     readonly TextBlock hintText = new() { Foreground = Brushes.White, FontSize = 12 };
     readonly StackPanel bar = new() { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed };
@@ -405,8 +408,12 @@ sealed class LineWindow : Window
         if (!force && !double.IsNaN(lastGradientOffset) && Math.Abs(offset - lastGradientOffset) < 2) return;
         lastGradientOffset = offset;
 
+        // 0.11.0 · binary-search the visible slice instead of walking all (up to MaxItems) cards
+        // every frame. xs is strictly ascending (Gap>0), so only this slice can be on screen.
         var cards = new List<(double center, Rgb color)>();
-        for (int i = 0; i < order.Count && i < xs.Length; i++)
+        int first = VisibleRange.FirstAtOrAfter(xs, Math.Min(order.Count, xs.Length), offset - 60, CardView.WidestCard * Theme.CardScale);
+        int end = VisibleRange.LastAtOrBefore(xs, Math.Min(order.Count, xs.Length), offset + W + 60);
+        for (int i = first; i < end && i < order.Count && i < xs.Length; i++)
         {
             double center = xs[i] + CardView.SizeOf(order[i]).Width / 2 - offset;
             if (center < -60 || center > W + 60) continue;
@@ -595,13 +602,19 @@ sealed class LineWindow : Window
     void Realize()
     {
         double lo = offset - 200, hi = offset + ActualWidth + 200;
-        for (int i = 0; i < order.Count; i++)
+        int n = Math.Min(order.Count, xs.Length);
+        // 0.11.0 · O(log n + visible) instead of O(n) per frame. The slice bounds are
+        // conservative (max-width margin), so the exact overlap test still decides.
+        int first = VisibleRange.FirstAtOrAfter(xs, n, lo, CardView.WidestCard * Theme.CardScale);
+        int end = VisibleRange.LastAtOrBefore(xs, n, hi);
+        var wanted = new HashSet<ClipItem>();
+        for (int i = first; i < end && i < n; i++)
         {
             var item = order[i];
             double w = CardView.SizeOf(item).Width;
-            bool want = xs[i] + w >= lo && xs[i] <= hi;
-            bool has = views.ContainsKey(item);
-            if (want && !has)
+            if (xs[i] + w < lo || xs[i] > hi) continue; // exact test inside the slice
+            wanted.Add(item);
+            if (!views.ContainsKey(item))
             {
                 var v = new CardView(item, actions)
                 {
@@ -613,8 +626,10 @@ sealed class LineWindow : Window
                 Canvas.SetLeft(v, xs[i]);
                 Canvas.SetTop(v, CardTop + RopeY(xs[i] + w / 2 - offset));
             }
-            else if (!want && has) Unrealize(item);
         }
+        // views holds only on-screen cards (a few), so this diff is cheap and catches cards that
+        // scrolled out even though their old index is far outside the new slice.
+        foreach (var item in views.Keys.Where(k => !wanted.Contains(k)).ToList()) Unrealize(item);
         UpdateDecor();
     }
 
@@ -638,13 +653,19 @@ sealed class LineWindow : Window
             v.Highlight = highlight;
         }
         double W = viewport.Width;
-        if (W <= 0 || maxOffset <= 0) { viewport.OpacityMask = null; return; }
-        var mask = new LinearGradientBrush { MappingMode = BrushMappingMode.Absolute, StartPoint = new Point(0, 0), EndPoint = new Point(W, 0) };
-        mask.GradientStops.Add(new GradientStop(offset > 1 ? Colors.Transparent : Colors.Black, 0));
-        mask.GradientStops.Add(new GradientStop(Colors.Black, Fade / W));
-        mask.GradientStops.Add(new GradientStop(Colors.Black, 1 - Fade / W));
-        mask.GradientStops.Add(new GradientStop(offset < maxOffset - 1 ? Colors.Transparent : Colors.Black, 1));
-        viewport.OpacityMask = mask;
+        if (W <= 0 || maxOffset <= 0) { viewport.OpacityMask = null; fadeReady = false; return; }
+        if (!fadeReady)
+        {
+            fadePaint.GradientStops.Clear();
+            foreach (var stop in fadeStops) fadePaint.GradientStops.Add(stop);
+            fadeReady = true;
+        }
+        fadePaint.EndPoint = new Point(W, 0);
+        fadeStops[0].Offset = 0;    fadeStops[0].Color = offset > 1 ? Colors.Transparent : Colors.Black;
+        fadeStops[1].Offset = Fade / W; fadeStops[1].Color = Colors.Black;
+        fadeStops[2].Offset = 1 - Fade / W; fadeStops[2].Color = Colors.Black;
+        fadeStops[3].Offset = 1;    fadeStops[3].Color = offset < maxOffset - 1 ? Colors.Transparent : Colors.Black;
+        if (!ReferenceEquals(viewport.OpacityMask, fadePaint)) viewport.OpacityMask = fadePaint;
     }
 
     static void Move(UIElement v, double left, bool animate)

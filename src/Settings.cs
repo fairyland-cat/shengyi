@@ -72,16 +72,32 @@ sealed class Settings
     public bool DiagnosticsEnabled { get; set; } = true;
     public string DiagnosticsLevel { get; set; } = "standard"; // "errors" | "standard" | "verbose"
 
+    // 0.11.0 · set when a corrupt file had to be quarantined, so the UI can tell the user once
+    // instead of silently losing settings/history. Cleared by AppController after it reports.
+    public static bool LoadRecovered { get; set; }
+
     public static Settings Load()
     {
         try
         {
             var json = File.ReadAllText(FilePath);
-            var s = JsonSerializer.Deserialize<Settings>(json) ?? new();
+            var s = new Settings();
+            int bad = JsonRobust.MergeObject(json, s);   // one bad field no longer resets all fields
             s.MigrateLegacyWindow(json);
+            if (bad > 0)
+            {
+                LoadRecovered = true;
+                Diag.Warn("settings", "bad fields ignored", ("fields", bad));
+            }
             return s;
         }
-        catch { return new(); }
+        catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException)
+        {
+            LoadRecovered = AtomicFile.Quarantine(FilePath, DateTime.UtcNow);
+            try { Diag.Warn("settings", "file unreadable, quarantined", ("recovered", LoadRecovered), ("error", e.GetType().Name)); }
+            catch { /* logging must never break startup */ }
+            return new();
+        }
     }
 
     // 0.7.1 and earlier stored "FreqWindowDays": 1..90, default 7. Convert it to minutes so
@@ -90,11 +106,8 @@ sealed class Settings
     void MigrateLegacyWindow(string json) =>
         FreqWindowMinutes = FreqWindow.FromLegacyJson(json, FreqWindowMinutes);
 
-    public void Save()
-    {
-        Directory.CreateDirectory(DataDir);
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-    }
+    public void Save() => AtomicFile.WriteText(FilePath,
+        JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
 
     public Settings Clone() => JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(this))!;
 }

@@ -101,14 +101,21 @@ static class Diag
         return ext.ToLowerInvariant();
     }
 
-    public static string FormatValue(object? value) => value switch
+    public static string FormatValue(object? value)
     {
-        null => "null",
-        bool b => b ? "1" : "0",
-        string s => Sanitize(s),
-        IFormattable f => Sanitize(f.ToString(null, CultureInfo.InvariantCulture)),
-        _ => Sanitize(value.ToString()),
-    };
+        try
+        {
+            return value switch
+            {
+                null => "null",
+                bool b => b ? "1" : "0",
+                string s => Sanitize(s),
+                IFormattable f => Sanitize(f.ToString(null, CultureInfo.InvariantCulture) ?? "?"),
+                _ => Sanitize(value.ToString() ?? "?"),
+            };
+        }
+        catch { return "?"; } // a field whose ToString throws is logged as unknown, not fatal
+    }
 
     public static string Line(DateTime utc, DiagLevel level, string category, string message,
         params (string Key, object? Value)[] fields)
@@ -194,8 +201,12 @@ static class Diag
 
     public static void Write(DiagLevel level, string cat, string msg, params (string Key, object? Value)[] f)
     {
-        if (!ShouldLog(mode, level)) return;
-        Enqueue(Line(DateTime.UtcNow, level, cat, msg, f));
+        try
+        {
+            if (!ShouldLog(mode, level)) return;
+            Enqueue(Line(DateTime.UtcNow, level, cat, msg, f));
+        }
+        catch { /* a hostile field value must never take down the caller */ }
     }
 
     // Same reason repeating every 30 ms would bury the useful lines. One line per key per
@@ -225,12 +236,21 @@ static class Diag
 
     public static void Crash(string source, Exception e)
     {
-        if (!ShouldLog(mode, DiagLevel.Error)) return;
-        string line = Line(DateTime.UtcNow, DiagLevel.Error, "crash", source,
-            ("type", e.GetType().Name), ("msg", e.Message));
-        line += " stack=\"" + SanitizeLong(e.ToString(), 1500) + "\"";
-        Enqueue(line);
-        Flush(); // a crash may be followed by process death
+        // This runs INSIDE an unhandled-exception handler: a second throw here would mask the
+        // original crash, so every step that can fail (ToString, stack rendering, disk) is fenced.
+        try
+        {
+            if (!ShouldLog(mode, DiagLevel.Error)) return;
+            string type = e?.GetType().Name ?? "unknown";
+            string message = e?.Message ?? "";
+            string line = Line(DateTime.UtcNow, DiagLevel.Error, "crash", source,
+                ("type", type), ("msg", message));
+            try { line += " stack=\"" + SanitizeLong(e!.ToString(), 1500) + "\""; }
+            catch { /* an overridden ToString may throw */ }
+            Enqueue(line);
+            Flush(); // a crash may be followed by process death
+        }
+        catch { /* last resort: never throw from a crash handler */ }
     }
 
     static void Enqueue(string line)

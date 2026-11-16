@@ -18,6 +18,8 @@
 | 文档 | `README.md`（功能说明 + 源码清单表）、`docs/*.png` | 用户可见变化、升版本 |
 | 全局快捷键 | `Watchers.cs`（`MessageWindow` 注册 / 注销 / `ProbeChord`）、`Dialogs.cs`（`ChordFieldBox`、`LocalChordCheck`、保存拦截）、`Strings.cs`、`KeyChord.cs`、`HotkeyCheck.cs`、`AppController.cs`（注入回调）、`Shots.cs`（离屏渲染） | 新增组合键、改探测或注册状态、改冲突判定 |
 | 诊断日志 | `src/Diag.cs`（核心 + 纯逻辑）、`Program.cs`（三通道异常兜底）、`Settings.cs`（开关 / 级别）、`Dialogs.cs` / `Strings.cs`（设置项）、`AppController.cs`（启动、屏幕 / DPI、导出诊断包）、`Actions.cs` / `Watchers.cs` / `Reveal.cs`（埋点）、`_verify/Program.cs` + `verify.csproj` | 新增埋点、改级别 / 脱敏 / 滚动规则、改设置项或导出内容 |
+| 数据安全（0.10.1） | `src/JsonRobust.cs`、`src/AtomicFile.cs`、`Settings.cs`（Load/Save）、`Clips.cs`（Load/Save + `Retag`）、`AppController.cs`（恢复提示）、`Strings.cs` | 改 JSON 读写、容错策略、备份命名、启动打标时机 |
+| 粘贴与可见性（0.10.1） | `src/PasteGuard.cs`、`src/VisibleRange.cs`、`Native.cs`（SendInput 返回值）、`Actions.cs`（PasteInto / 序列令牌 / WebP 回退）、`Watchers.cs`（重试 / 热键恢复）、`LineWindow.cs`（二分切片 / brush 池）、`CardView.cs`（WidestCard）、`SmartTags.cs`（正则预编译） | 改注入回退、令牌规则、可见切片边界、卡片宽度上限 |
 | 发布 | `scripts/build-release.ps1`、`check-version.ps1`、`check-release.ps1` | 发布链路本身；日常改动无需动 |
 
 **实例（0.8.0，把统计窗口从天改成分钟）** 实际联动 12 处：新增 `FreqWindow.cs`；改 `Clips.cs`（截止与计数）、`Settings.cs`（字段 + 旧 `FreqWindowDays` ×1440 迁移）、`Theme.cs`（快照）、`Dialogs.cs`（可输入数字步进器）、`Ui.cs`（步进器实现）、`Strings.cs`（单位与提示）、`CardView.cs`（悬浮提示易读单位）；改 `_verify/Program.cs` + `verify.csproj`；改 `README.md`、`CHANGELOG.md`、`shengyi.csproj`、`installer/shengyi.iss`；最后重拍全部截图。只搜 `FreqWindowDays` 会漏掉 README 里的「近 N 天」、CHANGELOG、截图版本号和旧配置迁移。
@@ -50,6 +52,9 @@ powershell -File scripts\impact.ps1 -Keyword FreqWindowMinutes
 - **`QuickInsert()` 里 `PickInsertItem()` 必须早于 `RetractAll()`**：`ActiveKeyboardWindow` 要求 `IsOut && KeyboardMode`，收起后恒为 false，搜索首条命中会丢失。收起后还要 `ForceForeground` + 90 ms 等待并释放仍按住的 Shift/Ctrl/Alt，否则 Unicode 会打进正在关闭的绳子窗口。
 - **热键注册失败要报出具体键名并用弹窗告知**：托盘气泡常被通知中心吞掉。`MessageWindow.SetAuxHotkeys()` 返回逐键 `AuxHotkeyResult`，`HotkeyCheck.FailedChords()` 只列「已启用且确实失败」的键；便签热键 `SetNoteHotkey()` 的返回值同样不能忽略。
 - **诊断日志绝不记录剪贴板内容**：只记类型、格式名、字节数、结果、耗时与窗口 / 屏幕几何。任何路径字段必须过 `Diag.PathShape()`（只返回扩展名），来源进程名遵循 `RecordSourceApp` 开关。`Reveal.Tick()` 每 30 ms 跑一次，只允许记录**状态变化**并用 `Diag.Throttled()` 做 60 s 节流，禁止逐次落盘；高频细节一律 `Diag.Debug()`（默认关闭）。`--shots` / `--preview` 在 `Program.Main` 里提前返回、不调用 `Diag.Init()`，所以离屏构建不产生任何日志。日志写入在后台线程，导出前 `Diag.Export()` 内部会 `Flush()` 同步排空队列。
+- **0.11.0 数据安全**：`Settings.Save` / `Clips.Save` 必须走 `AtomicFile.WriteText`（临时文件 + Move 原子替换），不得改回直接 `File.WriteAllText`。JSON 读取必须走 `JsonRobust`（逐字段 / 逐条容错），单个坏值不得清空整个对象；整文件不可读时先 `AtomicFile.Quarantine` 备份为 `.bad.<UTC>` 再返回空。启动打标只对 `Tags == null` 的旧历史执行，`RefreshTags()` 才 `force: true` 全量重扫。
+- **0.11.0 粘贴回退**：`Native.SendKeys` / `SendUnicode` 的返回值必须检查；焦点未匹配、前台仍属自身、注入数不足一律回退「仅复制」并提示，**绝不谎报已粘贴**。逐条队列的每次 `PasteInto` 都要捕获 `seqToken`，90 ms 等待后令牌变了就丢弃；`StartSequence` 与 `StopSequence` 都必须递增令牌。
+- **0.11.0 渲染热路径**：`Realize()` 与 `UpdateRopeGradient()` 必须先用 `VisibleRange` 二分求可见切片再逐卡判断，`xs` 严格递增（Gap=18）是这个前提；卡片宽度上界取 `CardView.WidestCard`（210）。`UpdateDecor()` 的淡出 brush / stop 只能复用 `fadePaint` / `fadeStops`，不得每帧 `new LinearGradientBrush`。剪贴板重试走 `DispatcherTimer`，禁止在 UI 线程 `Thread.Sleep`。
 
 ---
 

@@ -41,6 +41,7 @@ sealed class AppController : IDisposable
         messages = new MessageWindow();
         messages.Hotkey += reveal.Toggle;
         messages.NoteHotkey += () => actions.NewSticky();
+        messages.HotkeyRestoreFailed += () => tray.ShowBalloonTip(8000, S.AppName, S.HotkeyRestoredFailed, Forms.ToolTipIcon.Warning);
         messages.NextHotkey += () => actions.SequenceNext();
         messages.InsertHotkey += () => actions.QuickInsert();
         hook = new KeyboardHook { Enabled = settings.ReplaceWinV };
@@ -60,6 +61,12 @@ sealed class AppController : IDisposable
             settings.ClipboardWelcomeShown = true;
             settings.Save();
             tray.ShowBalloonTip(5000, S.AppName, string.Format(S.Welcome, CurrentHotkey), Forms.ToolTipIcon.Info);
+        }
+        // 0.11.0 · tell the user once when a corrupt settings/history file was quarantined.
+        if (Settings.LoadRecovered)
+        {
+            Settings.LoadRecovered = false;
+            tray.ShowBalloonTip(8000, S.AppName, S.DataRecovered, Forms.ToolTipIcon.Warning);
         }
         reveal.Start();
         LogStartup();
@@ -275,6 +282,7 @@ sealed class AppController : IDisposable
         store.RefreshTags();   // re-recognise history when 智能标签 was toggled
         Theme.Apply(settings); // repaints every line window and rebuilds its cards
         ApplyAuxHotkeys();     // pick up the two optional paste-mode chords
+        noteHotkeyFailed = !messages.SetNoteHotkey(); // idempotent re-register after a chord probe
         ReportHotkeyFailures(true, true); // main chord's failure was handled above + rolled back
         SyncHook();            // Win+V / Esc hook follows the saved settings and any live sequence
         try { Autostart.Enabled = w.StartWithWindows; }

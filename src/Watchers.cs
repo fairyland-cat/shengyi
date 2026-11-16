@@ -32,6 +32,9 @@ sealed class MessageWindow : IDisposable
     public event Action? NextHotkey;      // paste the next clip in a sequence
     public event Action? InsertHotkey;    // quick insert without touching the clipboard
     public event Action? ClipboardChanged;
+    // 0.11.0 · raised once when a chord probe could not restore a previously working hotkey.
+    public event Action? HotkeyRestoreFailed;
+    bool restoreWarned;
 
     public MessageWindow()
     {
@@ -72,6 +75,7 @@ sealed class MessageWindow : IDisposable
     // moment, including while the line is hidden and has no keyboard focus.
     public bool SetNoteHotkey()
     {
+        Native.UnregisterHotKey(source.Handle, NoteHotkeyId); // idempotent: a repeat must not fail with 1409
         noteOn = Native.RegisterHotKey(source.Handle, NoteHotkeyId, NoteMods | NoRepeat, NoteVk);
         Diag.Write(noteOn ? DiagLevel.Info : DiagLevel.Warn, "hotkey", "note register",
             ("chord", HotkeyText.Describe(NoteMods, NoteVk)), ("ok", noteOn),
@@ -135,6 +139,18 @@ sealed class MessageWindow : IDisposable
             ("chord", HotkeyText.Describe(mods, vk)), ("free", free), ("win32", err),
             ("restored_main", mainOn), ("restored_note", noteOn),
             ("restored_next", nextOn), ("restored_insert", insertOn));
+        // 0.11.0 · a chord grabbed by another app during the probe would otherwise leave a
+        // previously working shortcut silently dead until restart. Report the edge once.
+        bool lost = (hadMain && !mainOn) || (hadNote && !noteOn)
+                 || (hadNext && !nextOn) || (hadInsert && !insertOn);
+        if (lost && !restoreWarned)
+        {
+            restoreWarned = true;
+            Diag.Warn("hotkey", "probe lost a registered chord",
+                ("main", mainOn), ("note", noteOn), ("next", nextOn), ("insert", insertOn));
+            HotkeyRestoreFailed?.Invoke();
+        }
+        else if (!lost) restoreWarned = false;
         return free;
     }
 
@@ -243,6 +259,10 @@ sealed class ClipboardWatcher
     readonly Func<Settings> settings;
     readonly Action<ClipItem, BitmapSource?> onClip;
     readonly DispatcherTimer settle = new() { Interval = TimeSpan.FromMilliseconds(150) };
+    // 0.11.0 · clipboard retries used Thread.Sleep(60) on the UI thread (up to 300 ms freeze).
+    // A dispatcher timer spreads the same 5 attempts over ticks without blocking rendering.
+    readonly DispatcherTimer retry = new() { Interval = TimeSpan.FromMilliseconds(60) };
+    int retriesLeft;
     string? owner;
 
     public DateTime PausedUntil { get; set; } = DateTime.MinValue;
@@ -252,7 +272,8 @@ sealed class ClipboardWatcher
     {
         this.settings = settings;
         this.onClip = onClip;
-        settle.Tick += (_, _) => { settle.Stop(); Read(); };
+        settle.Tick += (_, _) => { settle.Stop(); retriesLeft = 5; TryRead(); };
+        retry.Tick += (_, _) => { if (retriesLeft <= 0) retry.Stop(); else TryRead(); };
     }
 
     // Wait a moment so the owner finishes putting all its formats on the clipboard.
@@ -276,23 +297,21 @@ sealed class ClipboardWatcher
         return false;
     }
 
-    void Read()
+    // One attempt per call; a locked clipboard schedules the next retry on the dispatcher instead
+    // of sleeping on the UI thread. Net behaviour (5 attempts, 60 ms apart) is unchanged.
+    void TryRead()
     {
         // Our own copies, and entries that password managers mark private.
         if (Native.IsClipboardFormatAvailable(SelfId) || Native.IsClipboardFormatAvailable(ExcludeFormat)
-            || Native.IsClipboardFormatAvailable(ViewerIgnoreFormat) || Excluded(owner)) return;
-        Exception? last = null;
-        for (int attempt = 0; attempt < 5; attempt++)
+            || Native.IsClipboardFormatAvailable(ViewerIgnoreFormat) || Excluded(owner)) { retry.Stop(); return; }
+        try { retry.Stop(); Capture(); }
+        catch (Exception e) when (e is ExternalException or IOException)
         {
-            try { Capture(); return; }
-            catch (Exception e) when (e is ExternalException or IOException)
-            {
-                last = e;
-                Thread.Sleep(60); // someone else has the clipboard open
-            }
+            retriesLeft--;
+            if (retriesLeft > 0) retry.Start();
+            else Diag.Warn("clipboard.capture", "all retries failed, clipboard locked",
+                ("attempts", 5), ("error", e.GetType().Name));
         }
-        Diag.Warn("clipboard.capture", "all retries failed, clipboard locked",
-            ("attempts", 5), ("error", last?.GetType().Name ?? "unknown"));
     }
 
     void Capture()

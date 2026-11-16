@@ -22,6 +22,7 @@ sealed class CardView : Grid
     public const double PegDrop = 10; // card top sits this far below the peg top
     const double ImageHeight = 92, Radius = 10;
     public const double TallestCard = 112; // sticky notes are the tallest card
+    public const double WidestCard = 210;  // widest image card; used for conservative visible-slice search
 
     public ClipItem Item { get; }
     public double Angle, Velocity; // degrees, degrees per second

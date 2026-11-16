@@ -276,6 +276,13 @@ static class S
     public static string HotkeyChordSaveBlocked => T("A paste-mode shortcut conflicts. Fix the highlighted chords before saving.", "有粘贴方式快捷键冲突，请先修改标红的组合键再保存");
     public static string HotkeyChordSaveBlockedTitle => T("Shortcut conflict", "快捷键冲突");
     public static string MsUnit => T(" ms", " 毫秒");
+    // 0.11.0 · data recovery + paste compatibility
+    public static string DataRecovered => T("A damaged settings/history file was found and kept as .bad — the rest of your data was loaded. You can delete the backup once everything looks right.",
+                                             "发现有损坏的设置/历史文件，已另存为 .bad 备份，其余数据已正常载入。确认无误后可删除该备份。");
+    public static string PasteCopyOnly => T("Could not send Ctrl+V (the target may need administrator rights). The clip is on the clipboard — paste it manually.",
+                                            "无法模拟 Ctrl+V（目标程序可能需要管理员权限）。内容已放到剪贴板，请手动粘贴。");
+    public static string HotkeyRestoredFailed => T("A shortcut was taken by another app while editing. Please check Settings → Paste modes.",
+                                                   "编辑期间有快捷键被其他程序占用，请在 设置 → 粘贴方式 中检查。");
     public static string HotkeyFailedMain => T("Open line ({0})", "打开晾衣绳（{0}）");
     public static string HotkeyFailedNote => T("New sticky note ({0})", "新建便签（{0}）");
     public static string HotkeyFailedNext => T("Next clip ({0})", "逐条粘贴下一条（{0}）");

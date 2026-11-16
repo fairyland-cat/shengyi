@@ -237,6 +237,8 @@ powershell -File scripts\check-release.ps1            # 单独复验产物与源
 | `src/KeyChord.cs` | 全局组合键文本解析、校验与显示（`Ctrl+3` 等） |
 | `src/HotkeyCheck.cs` | 粘贴方式组合键的内部冲突判定与软警告分类（零依赖纯逻辑） |
 | `src/Diag.cs` | 本地诊断日志：分级过滤、结构化单行、后台写线程与 2 MB 滚动、60 秒节流、脱敏与诊断包导出（零依赖） |
+| `src/JsonRobust.cs`、`src/AtomicFile.cs` | 容错 JSON 加载（单字段 / 单条损坏不影响其余）与临时文件 + 原子替换写入、损坏文件备份（零依赖） |
+| `src/PasteGuard.cs`、`src/VisibleRange.cs` | 粘贴注入失败回退与序列令牌判定、可见卡片二分切片（零依赖） |
 | `src/SmartTags.cs` | 本地正则实体识别、身份证 / 银行卡校验位、标签名与别名 |
 | `src/QuickLookWindow.cs` | 快速查看窗口（含来源程序与标签信息条） |
 | `src/SearchPanel.cs` | 键盘模式下的来源 / 标签 / 类型 / 文件类别 / 时间筛选抽屉 |
