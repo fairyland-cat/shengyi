@@ -14,7 +14,9 @@ sealed class AppController : IDisposable
 {
     readonly Application app;
     readonly List<LineWindow> windows = new();
-    Settings settings = Settings.Load();
+    // 0.12.0 · Program already loaded settings for Diag.Init; taking it as a constructor arg
+    // avoids a second synchronous read+merge of settings.json on the startup critical path.
+    Settings settings;
     ClipStore store = null!;
     RevealController reveal = null!;
     Actions actions = null!;
@@ -27,7 +29,11 @@ sealed class AppController : IDisposable
     bool noteHotkeyFailed;
     AuxHotkeyResult auxResult = new(true, true);
 
-    public AppController(Application app) => this.app = app;
+    public AppController(Application app, Settings? boot = null)
+    {
+        this.app = app;
+        settings = boot ?? Settings.Load();
+    }
 
     public void Start()
     {
@@ -124,7 +130,8 @@ sealed class AppController : IDisposable
                 string.Format(S.HotkeyFailedInsert, HotkeyText.Describe(settings.QuickInsertModifiers, settings.QuickInsertKey)));
         if (failed.Length == 0) return;
         string msg = string.Format(S.HotkeyFailedDetail, string.Join("\n", failed));
-        tray.ShowBalloonTip(8000, S.AppName, msg, Forms.ToolTipIcon.Warning);
+        // 0.12.0 · the modal box alone is enough; showing an 8 s balloon as well was a duplicate
+        // interruption on every startup. One channel, one message.
         Action show = () => MessageBox.Show(msg, S.AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
         if (interactive) show();
         else app.Dispatcher.BeginInvoke(show);
@@ -191,7 +198,10 @@ sealed class AppController : IDisposable
         menu.Opening += (_, _) => UpdatePause();
 
         tray = new Forms.NotifyIcon { Icon = Art.TrayIcon(), Text = S.AppName, ContextMenuStrip = menu, Visible = true };
-        tray.MouseClick += (_, e) => { if (e.Button == Forms.MouseButtons.Left) reveal.Toggle(); };
+        // 0.12.0 · a double-click on the tray icon fired MouseClick twice, so Toggle() ran twice
+        // and the line flashed open-then-closed. The second click of a double-click reports
+        // Clicks==2; ignore it so one physical double-click still toggles exactly once.
+        tray.MouseClick += (_, e) => { if (e.Button == Forms.MouseButtons.Left && e.Clicks == 1) reveal.Toggle(); };
         UpdateShortcutLabel();
         UpdatePause();
     }

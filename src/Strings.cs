@@ -32,6 +32,10 @@ static class S
     public static string Hint => T("Things you copy will hang here", "复制的内容会挂在这里");
     public static string NoMatches => T("Nothing matches", "没有匹配的内容");
     public static string Copied => T("Copied", "已复制");
+    public static string SearchClearTip => T("Clear search", "清空搜索");
+    // 0.12.0 · a failed copy used to be silent (log only), so a locked clipboard or a deleted
+    // image looked like a dead click. Keep it short — this is a tray balloon.
+    public static string CopyFailed => T("Could not copy: the clipboard is busy or the item is no longer available. Try again.", "复制失败：剪贴板被占用或内容已失效，请重试。");
     public static string Chars => T("{0} chars", "{0} 字");
     public static string Lines => T("{0} lines", "{0} 行");
     public static string MoreFiles => T("+{0} more", "另 {0} 项");
@@ -324,6 +328,8 @@ static class S
     public static string DiagPrivacyNote => T("No clipboard text, images or full paths are stored. Export from the tray menu; nothing is uploaded.",
                                               "不记录剪贴板正文、图片或完整路径。可在托盘菜单导出，不会自动上传。");
     public static string DiagClear => T("Clear", "清空");
+    public static string DiagClearConfirm => T("Delete all diagnostic logs now? This takes effect immediately and cannot be undone.",
+                                               "立即删除全部诊断日志？此操作马上生效且不可撤销。");
     public static string DiagCleared => T("Diagnostic log cleared.", "诊断日志已清空。");
     public static string DiagExportMenu => T("Export diagnostics…", "导出诊断包…");
     public static string DiagExportTitle => T("Save diagnostic bundle", "保存诊断包");

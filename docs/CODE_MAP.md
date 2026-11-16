@@ -20,6 +20,7 @@
 | 诊断日志 | `src/Diag.cs`（核心 + 纯逻辑）、`Program.cs`（三通道异常兜底）、`Settings.cs`（开关 / 级别）、`Dialogs.cs` / `Strings.cs`（设置项）、`AppController.cs`（启动、屏幕 / DPI、导出诊断包）、`Actions.cs` / `Watchers.cs` / `Reveal.cs`（埋点）、`_verify/Program.cs` + `verify.csproj` | 新增埋点、改级别 / 脱敏 / 滚动规则、改设置项或导出内容 |
 | 数据安全（0.10.1） | `src/JsonRobust.cs`、`src/AtomicFile.cs`、`Settings.cs`（Load/Save）、`Clips.cs`（Load/Save + `Retag`）、`AppController.cs`（恢复提示）、`Strings.cs` | 改 JSON 读写、容错策略、备份命名、启动打标时机 |
 | 粘贴与可见性（0.10.1） | `src/PasteGuard.cs`、`src/VisibleRange.cs`、`Native.cs`（SendInput 返回值）、`Actions.cs`（PasteInto / 序列令牌 / WebP 回退）、`Watchers.cs`（重试 / 热键恢复）、`LineWindow.cs`（二分切片 / brush 池）、`CardView.cs`（WidestCard）、`SmartTags.cs`（正则预编译） | 改注入回退、令牌规则、可见切片边界、卡片宽度上限 |
+| 性能与交互（0.12.0） | `Clips.cs`（`Ranked()` / `BumpRank()` / 写盘防抖）、`LineWindow.cs`（排序缓存 / 搜索防抖 / 复用集合 / 清空按钮 / 输入焦点守卫）、`SearchIndex.cs`（longCards + postings∩allowed）、`Thumbs.cs`（缩略图 LRU）、`Program.cs` + `AppController.cs`（复用 boot / 托盘去抖 / 热键单通道）、`Actions.cs` + `Strings.cs`（Copy 失败提示） | 改排序失效条件、搜索防抖时长、缩略图缓存策略、输入焦点规则；新增影响顺序的变更必须 `BumpRank()` |
 | 发布 | `scripts/build-release.ps1`、`check-version.ps1`、`check-release.ps1` | 发布链路本身；日常改动无需动 |
 
 **实例（0.8.0，把统计窗口从天改成分钟）** 实际联动 12 处：新增 `FreqWindow.cs`；改 `Clips.cs`（截止与计数）、`Settings.cs`（字段 + 旧 `FreqWindowDays` ×1440 迁移）、`Theme.cs`（快照）、`Dialogs.cs`（可输入数字步进器）、`Ui.cs`（步进器实现）、`Strings.cs`（单位与提示）、`CardView.cs`（悬浮提示易读单位）；改 `_verify/Program.cs` + `verify.csproj`；改 `README.md`、`CHANGELOG.md`、`shengyi.csproj`、`installer/shengyi.iss`；最后重拍全部截图。只搜 `FreqWindowDays` 会漏掉 README 里的「近 N 天」、CHANGELOG、截图版本号和旧配置迁移。
@@ -55,6 +56,9 @@ powershell -File scripts\impact.ps1 -Keyword FreqWindowMinutes
 - **0.11.0 数据安全**：`Settings.Save` / `Clips.Save` 必须走 `AtomicFile.WriteText`（临时文件 + Move 原子替换），不得改回直接 `File.WriteAllText`。JSON 读取必须走 `JsonRobust`（逐字段 / 逐条容错），单个坏值不得清空整个对象；整文件不可读时先 `AtomicFile.Quarantine` 备份为 `.bad.<UTC>` 再返回空。启动打标只对 `Tags == null` 的旧历史执行，`RefreshTags()` 才 `force: true` 全量重扫。
 - **0.11.0 粘贴回退**：`Native.SendKeys` / `SendUnicode` 的返回值必须检查；焦点未匹配、前台仍属自身、注入数不足一律回退「仅复制」并提示，**绝不谎报已粘贴**。逐条队列的每次 `PasteInto` 都要捕获 `seqToken`，90 ms 等待后令牌变了就丢弃；`StartSequence` 与 `StopSequence` 都必须递增令牌。
 - **0.11.0 渲染热路径**：`Realize()` 与 `UpdateRopeGradient()` 必须先用 `VisibleRange` 二分求可见切片再逐卡判断，`xs` 严格递增（Gap=18）是这个前提；卡片宽度上界取 `CardView.WidestCard`（210）。`UpdateDecor()` 的淡出 brush / stop 只能复用 `fadePaint` / `fadeStops`，不得每帧 `new LinearGradientBrush`。剪贴板重试走 `DispatcherTimer`，禁止在 UI 线程 `Thread.Sleep`。
+- **0.12.0 排序缓存**：`ClipStore.Ranked()` 是唯一的全量排序入口，reveal / 无词搜索必须读缓存，不得在 `Visible()` 里直接调 `Ranking.Order(store.Items)`。缓存键含 `rankVersion`（`Version` setter、`RecordUse`、`ResetUsage`、`SetPinned` 都会递增）+ 分钟桶（滚动窗口老化）+ `FreqThreshold/FreqWindowMinutes`；新增任何影响顺序的变更时**必须**同步 `BumpRank()`，否则排序会过期。有词搜索只排一次（pinned/score/time 复合排序），不要先 `Ranking.Order(match)` 再排第二遍。
+- **0.12.0 缩略图与分配**：`Thumbs.LoadFull(path, height>0)` 的 200px 解码走有界 LRU（96，键含文件时间戳自失效）；全尺寸解码（`height==0`，QuickLook / 复制 / 哈希）**不得缓存**，避免大位图常驻。`Realize()` 只能用复用字段 `wanted` / `toUnrealize`，`UpdateRopeGradient()` 只能用 `gradientCards`，禁止每帧新建集合或 LINQ。搜索框 `TextChanged` 走 90 ms `searchTimer` 防抖，`SetQuery`（截图）与 `OnKey` 命令键必须 `FlushSearch()` 才能看到即时结果。
+- **0.12.0 输入焦点**：搜索框有文字且获得焦点时，Left/Right/Home/End/Space/Delete 属于光标编辑，`OnKey` 必须让位给 TextBox，不得切卡片。所有 `Copy()` 失败分支必须 `Notify(S.CopyFailed)`，不得静默。
 
 ---
 

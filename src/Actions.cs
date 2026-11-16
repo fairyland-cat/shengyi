@@ -75,6 +75,7 @@ sealed class Actions
                     Diag.Warn("clipboard.copy", "image file unreadable",
                         ("fmt", item.ImageFormat ?? "null"), ("path_ext", Diag.PathShape(item.ImagePath)),
                         ("error", e.GetType().Name));
+                    Notify?.Invoke(S.CopyFailed);
                     return false;
                 }
                 bool placed = false;
@@ -142,7 +143,7 @@ sealed class Actions
                     ("bytes", bytes.Length), ("transcoded", transcoded),
                     ("standard_mime", mime ?? "none"),
                     ("formats", string.Join(",", staged)), ("ok", placed));
-                if (!placed) return false;
+                if (!placed) { Notify?.Invoke(S.CopyFailed); return false; }
                 break;
             case ClipKind.Files:
                 var files = new StringCollection();
@@ -152,6 +153,7 @@ sealed class Actions
                 {
                     Diag.Warn("clipboard.copy", "no existing files in file clip",
                         ("count", (item.Files ?? new()).Count));
+                    Notify?.Invoke(S.CopyFailed);
                     return false;
                 }
                 data.SetFileDropList(files);
@@ -182,6 +184,7 @@ sealed class Actions
                 ("kind", item.Kind.ToString()), ("formats", string.Join(",", staged)),
                 ("error", e.GetType().Name), ("ms", clock.ElapsedMilliseconds),
                 ("hint", "CLIPBRD_E_CANT_OPEN: clipboard held by another app"));
+            Notify?.Invoke(S.CopyFailed);
             return false;
         }
     }

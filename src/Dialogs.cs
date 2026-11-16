@@ -507,6 +507,10 @@ sealed class SettingsWindow : ChromeWindow
         var diagClear = new Pill(S.DiagClear, false) { MinWidth = 96 };
         diagClear.Click += () =>
         {
+            // 0.12.0 · clearing is immediate and unlike the other settings it can't be undone by
+            // Cancel. Make that explicit instead of deleting on a single click.
+            if (MessageBox.Show(S.DiagClearConfirm, S.AppName, MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                return;
             Diag.Clear();
             MessageBox.Show(S.DiagCleared, S.AppName, MessageBoxButton.OK, MessageBoxImage.Information);
         };

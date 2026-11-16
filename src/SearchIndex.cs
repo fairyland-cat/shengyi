@@ -27,6 +27,9 @@ sealed class SearchIndex
 
     readonly List<Entry> entries = new();
     Dictionary<string, List<int>> postings = new(StringComparer.Ordinal);
+    // Cards longer than GramLimit aren't fully covered by postings, so a term appearing past the
+    // covered head must still be found. Track just those; ordinary cards need no fallback scan.
+    readonly HashSet<int> longCards = new();
     int version = -1;
     bool built;
 
@@ -43,6 +46,7 @@ sealed class SearchIndex
     void Rebuild(IReadOnlyList<ClipItem> items)
     {
         entries.Clear();
+        longCards.Clear();
         postings = new Dictionary<string, List<int>>(StringComparer.Ordinal);
         for (int idx = 0; idx < items.Count; idx++)
         {
@@ -53,6 +57,7 @@ sealed class SearchIndex
             string norm = (body + " " + item.MetaText() + " " + py.Full + " "
                            + py.Initials + " " + py.Variants).ToLowerInvariant();
             entries.Add(new Entry { Item = item, Norm = norm });
+            if (norm.Length > GramLimit) longCards.Add(idx);
 
             string head = norm.Length > GramLimit ? norm[..GramLimit] : norm;
             foreach (var gram in Grams(head))
@@ -130,13 +135,23 @@ sealed class SearchIndex
         }
         else
         {
+            // 0.12.0 · visit only (candidates ∩ allowed) ∪ (longCards ∩ allowed) instead of every
+            // allowed index. When a query narrows k of N cards the cost drops from O(N) to O(k).
+            // The old loop walked all of `allowed` and skipped non-candidates — correct, but it
+            // paid O(N) even when the trigram postings had already narrowed to a handful.
             var set = new HashSet<int>(candidates);
-            foreach (int idx in allowed)
+            foreach (int idx in candidates)
             {
-                var norm = entries[idx].Norm;
-                // Postings cover all of a short card; anything longer needs the fallback check.
-                if (!set.Contains(idx) && norm.Length <= GramLimit) continue;
-                double s = Score(norm, term);
+                if (!allowed.Contains(idx)) continue;
+                double s = Score(entries[idx].Norm, term);
+                if (s > 0) hits[idx] = s;
+            }
+            // Over-long cards are only partly covered by postings; a term past the covered head
+            // can't appear in candidates, so check those explicitly.
+            foreach (int idx in longCards)
+            {
+                if (set.Contains(idx) || !allowed.Contains(idx)) continue;
+                double s = Score(entries[idx].Norm, term);
                 if (s > 0) hits[idx] = s;
             }
         }

@@ -10,6 +10,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using Forms = System.Windows.Forms;
 
 namespace Shengyi;
@@ -56,6 +57,7 @@ sealed class LineWindow : Window
     double lastGradientOffset = double.NaN;
     bool gradientActive, fadeReady;
     readonly Border hint, searchBar, tabBar, helpBar;
+    readonly Border searchClear;
     readonly TextBlock hintText = new() { Foreground = Brushes.White, FontSize = 12 };
     readonly StackPanel bar = new() { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed };
     readonly TextBox search;
@@ -66,6 +68,11 @@ sealed class LineWindow : Window
     readonly Dictionary<ClipItem, CardView> views = new();
     readonly Random rng = new();
     List<ClipItem> order = new();
+    // 0.12.0 · Realize() runs every scroll frame; reuse its scratch collections so scrolling
+    // no longer allocates a HashSet + LINQ closure + List per frame (Gen0 churn / GC hitches).
+    readonly HashSet<ClipItem> wanted = new();
+    readonly List<ClipItem> toUnrealize = new();
+    readonly List<(double center, Rgb color)> gradientCards = new();
     double[] xs = Array.Empty<double>();
     double offset, target, maxOffset, contentBottom = 40;
     int selected;
@@ -74,6 +81,10 @@ sealed class LineWindow : Window
     bool ticking, filterOpen;
     string highlight = "";
     TimeSpan lastFrame;
+    // 0.12.0 · typing in the search box triggered a full Relayout on every keystroke. Debounce the
+    // relayout 90 ms; SetQuery (screenshots) and the key handler flush it so they always see fresh
+    // state immediately.
+    readonly DispatcherTimer searchTimer = new() { Interval = TimeSpan.FromMilliseconds(90) };
 
     public LineWindow(Forms.Screen screen, ClipStore store, Actions actions, Func<Settings> settings)
     {
@@ -160,11 +171,33 @@ sealed class LineWindow : Window
             SetFiltersOpen(!filterOpen);
             if (KeyboardMode) search.Focus();
         };
+        // 0.12.0 · a clear ✕ appears once there is text, so emptying a search no longer means
+        // holding Backspace or knowing the Esc gesture.
+        searchClear = new Border
+        {
+            Width = 20, Height = 20, CornerRadius = new CornerRadius(10), Cursor = Cursors.Hand,
+            Visibility = Visibility.Collapsed, Background = Brushes.Transparent,
+            ToolTip = S.SearchClearTip,
+            Child = new TextBlock
+            {
+                Text = "\uE711", FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 10,
+                Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        searchClear.MouseLeftButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            search.Clear();
+            search.Focus();
+        };
         var searchRow = new DockPanel();
         DockPanel.SetDock(glyph, Dock.Left);
         searchRow.Children.Add(glyph);
         DockPanel.SetDock(gear, Dock.Right);
         searchRow.Children.Add(gear);
+        DockPanel.SetDock(searchClear, Dock.Right);
+        searchRow.Children.Add(searchClear);
         searchRow.Children.Add(new Grid { Children = { placeholder, search } });
         searchBar = new Border { CornerRadius = new CornerRadius(15), Padding = new Thickness(12, 5, 12, 5), Child = searchRow };
         bar.Children.Add(searchBar);
@@ -230,12 +263,16 @@ sealed class LineWindow : Window
         PreviewKeyDown += OnKey;
         PreviewMouseWheel += OnWheel;
         Deactivated += (_, _) => { if (IsOut && KeyboardMode) Dismissed?.Invoke(); };
+        searchTimer.Tick += (_, _) => { searchTimer.Stop(); Relayout(false); };
         search.TextChanged += (_, _) =>
         {
             placeholder.Visibility = search.Text.Length == 0 ? Visibility.Visible : Visibility.Hidden;
+            searchClear.Visibility = search.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
             selected = 0;
             target = 0;
-            Relayout(false);
+            // Debounce while typing; the key handler and SetQuery flush when an answer is needed now.
+            searchTimer.Stop();
+            searchTimer.Start();
         };
 
         store.Items.CollectionChanged += OnItemsChanged;
@@ -310,6 +347,7 @@ sealed class LineWindow : Window
         if (!IsOut) return;
         IsOut = false;
         KeyboardMode = false;
+        searchTimer.Stop();
         actions.ClearMulti(); // a hidden line must not keep an invisible Ctrl+Click selection
         SetActivatable(false);
         SlideTo(-Height, EasingMode.EaseIn, 200, () => { if (!IsOut) Hide(); });
@@ -410,16 +448,16 @@ sealed class LineWindow : Window
 
         // 0.11.0 · binary-search the visible slice instead of walking all (up to MaxItems) cards
         // every frame. xs is strictly ascending (Gap>0), so only this slice can be on screen.
-        var cards = new List<(double center, Rgb color)>();
+        gradientCards.Clear();
         int first = VisibleRange.FirstAtOrAfter(xs, Math.Min(order.Count, xs.Length), offset - 60, CardView.WidestCard * Theme.CardScale);
         int end = VisibleRange.LastAtOrBefore(xs, Math.Min(order.Count, xs.Length), offset + W + 60);
         for (int i = first; i < end && i < order.Count && i < xs.Length; i++)
         {
             double center = xs[i] + CardView.SizeOf(order[i]).Width / 2 - offset;
             if (center < -60 || center > W + 60) continue;
-            if (Theme.TintOf(order[i]) is { } c) cards.Add((center, c));
+            if (Theme.TintOf(order[i]) is { } c) gradientCards.Add((center, c));
         }
-        var stops = CardTints.RopeStops(cards, W, Theme.RopeBase, Theme.RopeStrength, Theme.RopeBanded);
+        var stops = CardTints.RopeStops(gradientCards, W, Theme.RopeBase, Theme.RopeStrength, Theme.RopeBanded);
         ropePaint.StartPoint = new Point(0, 0);
         ropePaint.EndPoint = new Point(W, 0);
         while (ropePaint.GradientStops.Count < stops.Length)
@@ -462,8 +500,20 @@ sealed class LineWindow : Window
         if (relayout) { selected = 0; target = 0; Relayout(false); }
     }
 
+    // Collapse a pending debounce into an immediate relayout (screenshots / key actions).
+    void FlushSearch()
+    {
+        if (!searchTimer.IsEnabled) return;
+        searchTimer.Stop();
+        Relayout(false);
+    }
+
     // Used by the off-screen screenshots, and handy for any future automation.
-    public void SetQuery(string text) => search.Text = text;
+    public void SetQuery(string text)
+    {
+        search.Text = text;
+        FlushSearch();
+    }
 
     // Quick insert asks the active line for its first text hit before falling back to "latest text".
     public string Query => search.Text;
@@ -496,7 +546,7 @@ sealed class LineWindow : Window
         if (!KeyboardMode)
         {
             highlight = "";
-            return Ranking.Order(store.Items);
+            return store.Ranked();
         }
 
         var q = SearchQuery.Parse(search.Text, filterPanel.SelectedApps,
@@ -516,9 +566,11 @@ sealed class LineWindow : Window
         else match = store.Items;
 
         // Only this view order changes; Items keeps its physical order for dedup, Sweep() and JSON.
-        var ranked = Ranking.Order(match);
-        if (!q.HasTerms || scores == null) return ranked; // filters alone keep the frequency order
-        return ranked
+        // 0.12.0 · with relevance scores the old code did Ranking.Order() then a full second sort —
+        // the first order was almost entirely discarded. Do it once. Filters-only still keeps the
+        // frequency order (all scores are 0 there, so the pinned/hot/cold order is meaningful).
+        if (!q.HasTerms || scores == null) return Ranking.Order(match);
+        return match
             .OrderBy(i => i.IsFront ? 0 : 1)             // pinned cards and notes always lead
             .ThenByDescending(i => scores.TryGetValue(i, out double s) ? s : 0)
             .ThenByDescending(i => i.Time)
@@ -607,7 +659,7 @@ sealed class LineWindow : Window
         // conservative (max-width margin), so the exact overlap test still decides.
         int first = VisibleRange.FirstAtOrAfter(xs, n, lo, CardView.WidestCard * Theme.CardScale);
         int end = VisibleRange.LastAtOrBefore(xs, n, hi);
-        var wanted = new HashSet<ClipItem>();
+        wanted.Clear();
         for (int i = first; i < end && i < n; i++)
         {
             var item = order[i];
@@ -628,8 +680,12 @@ sealed class LineWindow : Window
             }
         }
         // views holds only on-screen cards (a few), so this diff is cheap and catches cards that
-        // scrolled out even though their old index is far outside the new slice.
-        foreach (var item in views.Keys.Where(k => !wanted.Contains(k)).ToList()) Unrealize(item);
+        // scrolled out even though their old index is far outside the new slice. Collect first
+        // (can't mutate views while enumerating its keys), then remove — no LINQ/List allocation.
+        toUnrealize.Clear();
+        foreach (var key in views.Keys)
+            if (!wanted.Contains(key)) toUnrealize.Add(key);
+        foreach (var item in toUnrealize) Unrealize(item);
         UpdateDecor();
     }
 
@@ -704,8 +760,23 @@ sealed class LineWindow : Window
         var mods = Keyboard.Modifiers;
         bool ctrl = mods.HasFlag(ModifierKeys.Control), shift = mods.HasFlag(ModifierKeys.Shift);
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        var item = selected < order.Count ? order[selected] : null;
         bool empty = search.Text.Length == 0;
+
+        // 0.12.0 · when the search box holds text these keys belong to text editing (moving the
+        // caret, editing the query), not to card navigation. Home/End/Space/Delete were already
+        // gated on `empty`; Left/Right were not, so fixing a typo moved the selection instead of
+        // the caret. Card navigation stays available while the box is empty.
+        bool editing = !empty && Keyboard.FocusedElement == search;
+        if (editing && key is Key.Left or Key.Right or Key.Home or Key.End or Key.Space or Key.Delete)
+            return; // let the TextBox handle it
+
+        // A command key needs the freshly-filtered order; plain typing keeps the debounce.
+        bool command = key is Key.Escape or Key.Enter or Key.Tab
+                    || (ctrl && key is Key.P or Key.E or Key.N or Key.M or >= Key.D1 and <= Key.D9)
+                    || (empty && key is Key.Left or Key.Right or Key.Home or Key.End or Key.Space or Key.Delete);
+        if (command) FlushSearch();
+
+        var item = selected < order.Count ? order[selected] : null;
 
         switch (key)
         {
@@ -714,8 +785,8 @@ sealed class LineWindow : Window
                 else if (!empty) search.Clear();
                 else Dismissed?.Invoke();
                 break;
-            case Key.Left: Select(selected - 1); break;
-            case Key.Right: Select(selected + 1); break;
+            case Key.Left when empty: Select(selected - 1); break;
+            case Key.Right when empty: Select(selected + 1); break;
             case Key.Home when empty: Select(0); break;
             case Key.End when empty: Select(order.Count - 1); break;
             case Key.Tab: SetFilter((Filter)(((int)filter + (shift ? FilterCount - 1 : 1)) % FilterCount)); break;

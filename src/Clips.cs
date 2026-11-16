@@ -178,7 +178,29 @@ sealed class ClipStore : IDisposable
     // changes whenever the item list or any searchable text changes, so the index is rebuilt
     // only then — not on every keystroke in the search box.
     public SearchIndex Index { get; } = new();
-    public int Version { get; private set; }
+    int version;
+    public int Version { get => version; private set { version = value; rankVersion++; } }
+
+    // 0.12.0 · Reveal and every search keystroke used to re-sort the whole history
+    // (Ranking.Order: O(N log N) + ~6 List allocations). The order only changes when items,
+    // use counts, pin state or the frequency settings change — plus a coarse minute bucket so a
+    // use aging out of the rolling window is eventually picked up. Everything else reuses this.
+    int rankVersion;
+    (long Minute, int Threshold, int Window, int Rev)? rankedKey;
+    List<ClipItem>? rankedCache;
+
+    public List<ClipItem> Ranked()
+    {
+        var key = (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 60_000,
+                   Theme.FreqThreshold, Theme.FreqWindowMinutes, rankVersion);
+        if (rankedCache != null && rankedKey == key) return rankedCache;
+        rankedKey = key;
+        return rankedCache = Ranking.Order(Items);
+    }
+
+    // Call whenever a mutation changes the rank but not the searchable text (so Version, which
+    // only drives the index, is intentionally not touched).
+    void BumpRank() => rankVersion++;
 
     public List<(ClipItem item, double score)> Search(SearchQuery q)
     {
@@ -219,7 +241,10 @@ sealed class ClipStore : IDisposable
 
     readonly Func<Settings> settings;
     readonly Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
-    readonly DispatcherTimer saveTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
+    // 0.12.0 · every take (copy/paste/drag) reset a 500 ms timer that rewrote the whole history.
+    // 2 s collapses a burst of takes into one atomic write; Dispose() still calls Save() directly,
+    // so exiting never leaves unsaved changes. The file is small (<= MaxItems) so this is pure win.
+    readonly DispatcherTimer saveTimer = new() { Interval = TimeSpan.FromMilliseconds(2000) };
     readonly DispatcherTimer sweepTimer = new() { Interval = TimeSpan.FromHours(1) };
     readonly Dictionary<string, DispatcherTimer> pending = new(StringComparer.OrdinalIgnoreCase);
     readonly FileSystemWatcher watcher;
@@ -301,6 +326,7 @@ sealed class ClipStore : IDisposable
     public void SetPinned(ClipItem item, bool pinned)
     {
         item.Pinned = pinned;
+        BumpRank();                  // pinned cards always lead the ranking
         Updated?.Invoke(item);
         ScheduleSave();
     }
@@ -351,12 +377,14 @@ sealed class ClipStore : IDisposable
         if (stale > 0) times.RemoveRange(0, stale);
         times.Add(now);
         if (times.Count > MaxUseTimes) times.RemoveRange(0, times.Count - MaxUseTimes);
+        BumpRank();                  // use count changed: re-sort on the next reveal
         ScheduleSave();
     }
 
     public void ResetUsage()
     {
         foreach (var item in Items) { item.TotalUses = 0; item.UseTimes = null; }
+        BumpRank();
         UsageReset?.Invoke();
         ScheduleSave();
     }

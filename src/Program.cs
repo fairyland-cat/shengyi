@@ -51,7 +51,7 @@ static class Program
         };
 
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-        var controller = new AppController(app);
+        var controller = new AppController(app, boot);
         app.Startup += (_, _) => controller.Start();
         app.Exit += (_, _) =>
         {
